@@ -40,6 +40,11 @@ class QueryEditor(Container):
     }
     """
     
+    BINDINGS = [
+        ("ctrl+e", "execute_query", "Execute Query"),
+        ("ctrl+a", "select_all", "Select All"),
+    ]
+    
     def compose(self) -> ComposeResult:
         """Create simple query editor layout."""
         yield TextArea(
@@ -54,6 +59,11 @@ class QueryEditor(Container):
             # Let the parent app handle this
             event.stop()
             await self.app.action_execute_query()
+        if event.key == "ctrl+a":
+            # Select all text in the editor
+            editor = self.query_one("#query_editor", TextArea)
+            editor.select_all()
+            event.stop()
 
 
 class ResultViewer(Container):
@@ -327,7 +337,7 @@ class DBShellApp(App):
         
         # Get query text from current editor
         current_editor = self.get_current_editor()
-        query = current_editor.text
+        query = current_editor.selected_text or current_editor.text
         
         if not query.strip():
             return
