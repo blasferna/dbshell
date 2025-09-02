@@ -13,7 +13,7 @@ from mysql.connector import Error as MySQLError
 from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, Container
-from textual.widgets import Button, DataTable, Footer, Header, TextArea
+from textual.widgets import Button, DataTable, Footer, Header, TextArea, Select
 
 
 class QueryEditor(TextArea):
@@ -53,7 +53,7 @@ class ResultViewer(Container):
 class DatabaseConnection:
     """Manages database connection and query execution."""
     
-    def __init__(self, host: str, user: str, password: str, database: str, port: int = 3306):
+    def __init__(self, host: str, user: str, password: str, database: Optional[str] = None, port: int = 3306):
         self.host = host
         self.user = user
         self.password = password
@@ -62,24 +62,69 @@ class DatabaseConnection:
         self.connection: Optional[mysql.connector.MySQLConnection] = None
         self.cursor: Optional[mysql.connector.cursor.MySQLCursor] = None
     
-    def connect(self) -> Tuple[bool, str]:
+    def connect(self, database: Optional[str] = None) -> Tuple[bool, str]:
         """
         Establish database connection.
+        Args:
+            database: Optional database name to connect to
         Returns: (success: bool, message: str)
         """
+        # Use provided database or fall back to instance database
+        db_name = database or self.database
+        
         try:
+            # Connect without database first to check connection
             self.connection = mysql.connector.connect(
                 host=self.host,
                 user=self.user,
                 password=self.password,
-                database=self.database,
                 port=self.port,
                 autocommit=True
             )
-            self.cursor = self.connection.cursor()
-            return True, f"Connected to {self.database} on {self.host}:{self.port}"
+            
+            # If database is specified, select it
+            if db_name:
+                self.cursor = self.connection.cursor()
+                self.cursor.execute(f"USE `{db_name}`")
+                self.database = db_name
+                return True, f"Connected to {db_name} on {self.host}:{self.port}"
+            else:
+                self.cursor = self.connection.cursor()
+                return True, f"Connected to {self.host}:{self.port} (no database selected)"
         except MySQLError as e:
             return False, f"Connection failed: {str(e)}"
+    
+    def get_databases(self) -> Tuple[bool, str, Optional[List[str]]]:
+        """
+        Get list of available databases.
+        Returns: (success: bool, message: str, databases: Optional[List[str]])
+        """
+        if not self.connection or not self.cursor:
+            return False, "No database connection", None
+        
+        try:
+            self.cursor.execute("SHOW DATABASES")
+            databases = [row[0] for row in self.cursor.fetchall()]
+            # Filter out system databases
+            user_databases = [db for db in databases if db not in ['information_schema', 'performance_schema', 'mysql', 'sys']]
+            return True, f"Found {len(user_databases)} databases", user_databases
+        except MySQLError as e:
+            return False, f"Error getting databases: {str(e)}", None
+    
+    def change_database(self, database: str) -> Tuple[bool, str]:
+        """
+        Change to a different database.
+        Returns: (success: bool, message: str)
+        """
+        if not self.connection or not self.cursor:
+            return False, "No database connection"
+        
+        try:
+            self.cursor.execute(f"USE `{database}`")
+            self.database = database
+            return True, f"Changed to database: {database}"
+        except MySQLError as e:
+            return False, f"Error changing database: {str(e)}"
     
     def execute_query(self, query: str) -> Tuple[bool, str, Optional[List], Optional[List]]:
         """
@@ -146,6 +191,11 @@ class DBShellApp(App):
         padding: 0 1;
     }
     
+    #database_select {
+        width: 50;
+        margin-right: 1;
+    }
+    
     .results-panel {
         height: 60%;
     }
@@ -198,6 +248,12 @@ class DBShellApp(App):
                     language="sql",
                 )
             with Horizontal(classes="execute-panel"):
+                yield Select(
+                    options=[("No database selected", "")],
+                    value="",
+                    id="database_select",
+                    allow_blank=False,
+                )
                 yield Button("◀ Previous", id="prev_record_btn", variant="default", flat=True, disabled=True)
                 yield Button("Next ▶", id="next_record_btn", variant="default", flat=True, disabled=True)
                 yield Button("Vertical View", id="toggle_view_btn", variant="default", flat=True)
@@ -208,14 +264,117 @@ class DBShellApp(App):
     
     async def on_mount(self) -> None:
         """Initialize the application after mounting."""
-        # Try to connect to database
+        # Try to connect to database (without selecting a specific database first)
         success, message = self.db_connection.connect()
         if success:
             self.connected = True
+            # If a database was specified in args, notify user
+            if self.db_connection.database:
+                self.notify(message, severity="information")
+            # Load available databases
+            await self.refresh_databases()
         else:
             self.connected = False
             self.notify(message, severity="error")
+    
+    async def refresh_databases(self) -> None:
+        """Refresh the list of available databases."""
+        if not self.connected:
+            return
         
+        success, message, databases = self.db_connection.get_databases()
+        if success and databases:
+            # Update the database selector
+            database_select = self.query_one("#database_select", Select)
+            
+            # Create options list
+            options = [("No database selected", "")]
+            for db in databases:
+                options.append((db, db))
+            
+            # Set the options
+            database_select.set_options(options)
+            
+            # If we have a current database, select it
+            if self.db_connection.database:
+                database_select.value = self.db_connection.database
+        elif not success:
+            self.notify(message, severity="error")
+    
+    def show_database_selection(self) -> None:
+        """Show database selection command palette."""
+        if not self.connected:
+            self.notify("No database connection", severity="error")
+            return
+        
+        success, message, databases = self.db_connection.get_databases()
+        if success and databases:
+            # Set a flag to indicate we're in database selection mode
+            self._showing_database_selection = True
+            
+            # Import here to avoid circular imports
+            from textual.command import CommandPalette
+            
+            # Create a new command palette that will show databases
+            palette = CommandPalette(
+                placeholder="Select a database..."
+            )
+            self.push_screen(palette)
+        else:
+            self.notify(message or "No databases available", severity="error")
+    
+    def change_database_via_command(self, database: str) -> None:
+        """Change database via command palette."""
+        if not self.connected:
+            self.notify("No database connection", severity="error")
+            return
+        
+        # Reset the database selection mode flag
+        if hasattr(self, '_showing_database_selection'):
+            self._showing_database_selection = False
+        
+        success, message = self.db_connection.change_database(database)
+        if success:
+            self.notify(message, severity="information")
+            # Update the database selector UI to reflect the change
+            database_select = self.query_one("#database_select", Select)
+            database_select.value = database
+            # Clear current results when changing database
+            self.current_columns = []
+            self.current_rows = []
+            self.current_record_index = 0
+            self.selected_record_index = None
+            results_table = self.query_one("#results_table", DataTable)
+            results_table.clear(columns=True)
+        else:
+            self.notify(message, severity="error")
+    
+    @on(Select.Changed, "#database_select")
+    async def on_database_changed(self, event: Select.Changed) -> None:
+        """Handle database selection change."""
+        if not self.connected:
+            return
+        
+        database = str(event.value) if event.value else None
+        
+        if database:
+            success, message = self.db_connection.change_database(database)
+            if success:
+                self.notify(message, severity="information")
+                # Clear current results when changing database
+                self.current_columns = []
+                self.current_rows = []
+                self.current_record_index = 0
+                self.selected_record_index = None
+                results_table = self.query_one("#results_table", DataTable)
+                results_table.clear(columns=True)
+            else:
+                self.notify(message, severity="error")
+                # Reset selector to previous value
+                if self.db_connection.database:
+                    event.control.value = self.db_connection.database
+                else:
+                    event.control.value = ""
     
     def get_current_editor(self) -> TextArea:
         """Get the query editor."""
@@ -295,9 +454,18 @@ class DBShellApp(App):
             self.notify("No database connection", severity="error")
             return
         
-        # Get query text from current editor
+        # Check if a database is selected (unless it's a query that doesn't require one)
         current_editor = self.get_current_editor()
         query = current_editor.selected_text or current_editor.text
+        query_upper = query.strip().upper()
+        
+        # These queries don't require a database to be selected
+        database_independent_queries = ['SHOW DATABASES', 'CREATE DATABASE', 'DROP DATABASE']
+        requires_database = not any(query_upper.startswith(cmd) for cmd in database_independent_queries)
+        
+        if requires_database and not self.db_connection.database:
+            self.notify("Please select a database first", severity="error")
+            return
         
         if not query.strip():
             return
@@ -326,6 +494,12 @@ class DBShellApp(App):
                 self.selected_record_index = None
                 results_table = self.query_one("#results_table", DataTable)
                 results_table.clear(columns=True)
+                
+                # Check if this was a database-related query and refresh the database list
+                query_upper = query.strip().upper()
+                if any(cmd in query_upper for cmd in ['CREATE DATABASE', 'DROP DATABASE']):
+                    await self.refresh_databases()
+
         else:
             self.notify(message, severity="error")
             # Clear stored data and table on error
@@ -448,8 +622,10 @@ def parse_arguments() -> argparse.Namespace:
         epilog="""
 Examples:
   %(prog)s --host localhost --user root --password mypass --database testdb
+  %(prog)s --host localhost --user root --password mypass  # Database can be selected interactively
   %(prog)s --host 192.168.1.100 --user admin --password secret --database production --port 3307
   %(prog)s -h localhost -u user -p pass -d mydb -P 3306
+  %(prog)s -h localhost -u user -p pass  # No database specified
         """
     )
     
@@ -480,8 +656,8 @@ Examples:
     
     parser.add_argument(
         "--database", "-d",
-        required=True,
-        help="Database name (required)"
+        required=False,
+        help="Database name (optional - can be selected interactively)"
     )
     
     parser.add_argument(
@@ -504,7 +680,7 @@ def main():
             host=args.host,
             user=args.user,
             password=args.password,
-            database=args.database,
+            database=args.database,  # Can be None now
             port=args.port
         )
         
