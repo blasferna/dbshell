@@ -9,14 +9,18 @@ source = { virtual = "." }
 dependencies = [
     { name = "mysql-connector-python" },
     { name = "textual" },
+    { name = "tree-sitter" },
     { name = "tree-sitter-languages" },
+    { name = "tree-sitter-sql" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "mysql-connector-python", specifier = ">=8.0.33" },
     { name = "textual", specifier = ">=0.41.0" },
+    { name = "tree-sitter", specifier = ">=0.25.1" },
     { name = "tree-sitter-languages", specifier = ">=1.10.2" },
+    { name = "tree-sitter-sql", specifier = ">=0.3.8" },
 ]
 
 [[package]]
@@ -207,6 +211,21 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/19/76/25bb32a9be1c476e388835d5c8de5af2920af055e295770003683896cfe2/tree_sitter_languages-1.10.2-cp312-cp312-musllinux_1_1_x86_64.whl", hash = "sha256:1aeabd3d60d6d276b73cd8f3739d595b1299d123cc079a317f1a5b3c5461e2ca", size = 8956249, upload-time = "2024-02-04T10:28:57.094Z" },
     { url = "https://files.pythonhosted.org/packages/52/01/8e2f97a444d25dde1380ec20b338722f733b6cc290524357b1be3dd452ab/tree_sitter_languages-1.10.2-cp312-cp312-win32.whl", hash = "sha256:fab8ee641914098e8933b87ea3d657bea4dd00723c1ee7038b847b12eeeef4f5", size = 8363094, upload-time = "2024-02-04T10:28:59.156Z" },
     { url = "https://files.pythonhosted.org/packages/47/58/0262e875dd899447476a8ffde7829df3716ffa772990095c65d6de1f053c/tree_sitter_languages-1.10.2-cp312-cp312-win_amd64.whl", hash = "sha256:5e606430d736367e5787fa5a7a0c5a1ec9b85eded0b3596bbc0d83532a40810b", size = 8268983, upload-time = "2024-02-04T10:29:00.987Z" },
+]
+
+[[package]]
+name = "tree-sitter-sql"
+version = "0.3.8"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/2a/e6/7453a693e440d49916b9672963d98cb0c1bbe94f115014582e93beeff8a3/tree_sitter_sql-0.3.8.tar.gz", hash = "sha256:b1fb94ad6902d46ae26718c0144b55d1a6ef2b60ea5d9184850f8f79b64ec4a1", size = 715158, upload-time = "2025-02-13T16:08:14.325Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/70/3d/a5466e79584791cc718c19d56d9cad12d6100f344051cad3f46d09c5dfac/tree_sitter_sql-0.3.8-cp38-abi3-macosx_10_9_x86_64.whl", hash = "sha256:97c77a0447c9fbada9d66ccf21842fab4e79f2d0add940898dc4285cf450824c", size = 280609, upload-time = "2025-02-13T16:08:02.339Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/2c/9d6f2b684515b0b75a31dc53ac8018822074bf21e744a77499b8c37fa1b2/tree_sitter_sql-0.3.8-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:6ceef7e5070e519bf32d4a10e602e1e0fe38c0ac277318e595b98461be809ba1", size = 296161, upload-time = "2025-02-13T16:08:03.883Z" },
+    { url = "https://files.pythonhosted.org/packages/69/c2/f9a16f4a5a698c8dee446006208ed8c62934292b66cba10f98680a1e4326/tree_sitter_sql-0.3.8-cp38-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b98981b827d83d47aaaff49ba3180f481504dc2cc41d106f84c8c6111553a430", size = 336519, upload-time = "2025-02-13T16:08:05.57Z" },
+    { url = "https://files.pythonhosted.org/packages/6c/64/de6ea4418db54ffc87630d49fa30a76a83774c73d2402cd7c8a3d6db0d10/tree_sitter_sql-0.3.8-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ef00e0b30d62ec1d97fbfc3a3c1e9bf4c01aef6de50a29ad95de8452b848c149", size = 334223, upload-time = "2025-02-13T16:08:06.935Z" },
+    { url = "https://files.pythonhosted.org/packages/0c/44/2723c54e0309cda89f643457d40511acdd908f70408728ad6a5c4aa5bc88/tree_sitter_sql-0.3.8-cp38-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:18268daaca95e38ed0f3b751defc213c07263576f864eaa2a44f642a54f1ff18", size = 335663, upload-time = "2025-02-13T16:08:08.455Z" },
+    { url = "https://files.pythonhosted.org/packages/00/93/38f26ed9760520b7f29d7328b8211081945dc846a32ff0b0daaaef7af681/tree_sitter_sql-0.3.8-cp38-abi3-win_amd64.whl", hash = "sha256:bd2832b719d4d3b1560f06fdfabbdb95d1119e8debb96b9b95d1177fe4fccf4c", size = 302976, upload-time = "2025-02-13T16:08:10.378Z" },
+    { url = "https://files.pythonhosted.org/packages/0d/d9/dd32d7b74e20dd057d74fb21be0af3e6a1be69709494092fcc3a560200b0/tree_sitter_sql-0.3.8-cp38-abi3-win_arm64.whl", hash = "sha256:5630369688f3eecc59740f2e48e23ac5b905961ad2e8b6a1bcee80a212f85727", size = 286947, upload-time = "2025-02-13T16:08:12.357Z" },
 ]
 
 [[package]]
