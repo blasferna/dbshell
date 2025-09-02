@@ -4,7 +4,32 @@ version = "0.1.0"
 description = "A simple SQL query editor and executor TUI application"
 readme = "README.md"
 requires-python = ">=3.11"
+authors = [
+    { name = "Blas Isaias Fernández", email = "blasferna@gmail.com" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Environment :: Console",
+    "Environment :: Console :: Curses",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Topic :: Database",
+    "Topic :: Database :: Front-Ends",
+    "Topic :: Software Development :: User Interfaces",
+    "Topic :: Terminals",
+    "Topic :: Utilities",
+    "Development Status :: 3 - Alpha",
+]
 dependencies = [
     "textual>=0.41.0",
     "mysql-connector-python>=8.0.33"
 ]
+
+
+[project.scripts]
+dbshell = "main:main"
+
