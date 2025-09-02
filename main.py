@@ -182,17 +182,21 @@ class DBShellApp(App):
     .editor-panel {
         height: 30%;
     }
-    
-    .execute-panel {
-        height: auto;
+
+    .button-group {
         layout: horizontal;
         align: right middle;
-        margin: 0 0;
-        padding: 0 1;
+        width: 70%;
+    }
+    
+    .select-database-container {
+        layout: horizontal;
+        align: left middle;
+        width: 30%;
     }
     
     #database_select {
-        width: 50;
+        width: 30;
         margin-right: 1;
     }
     
@@ -239,7 +243,6 @@ class DBShellApp(App):
     
     def compose(self) -> ComposeResult:
         """Create the main modern application layout."""
-        yield Header()
         with Vertical(classes="main-container"):
             with Container(classes="editor-panel"):
                 yield QueryEditor(
@@ -247,17 +250,19 @@ class DBShellApp(App):
                     show_line_numbers=True,
                     language="sql",
                 )
-            with Horizontal(classes="execute-panel"):
-                yield Select(
-                    options=[("No database selected", "")],
-                    value="",
-                    id="database_select",
-                    allow_blank=False,
-                )
-                yield Button("◀ Previous", id="prev_record_btn", variant="default", flat=True, disabled=True)
-                yield Button("Next ▶", id="next_record_btn", variant="default", flat=True, disabled=True)
-                yield Button("Vertical View", id="toggle_view_btn", variant="default", flat=True)
-                yield Button("Execute", id="execute_btn", variant="primary", flat=True)
+            with Horizontal(classes="action-panel"):
+                with Container(classes="select-database-container"):
+                    yield Select(
+                        options=[("No database selected", "")],
+                        value="",
+                        id="database_select",
+                        allow_blank=False,
+                    )
+                with Horizontal(classes="button-group"):
+                    yield Button("◀ Previous", id="prev_record_btn", variant="default", flat=True, disabled=True)
+                    yield Button("Next ▶", id="next_record_btn", variant="default", flat=True, disabled=True)
+                    yield Button("Vertical View", id="toggle_view_btn", variant="default", flat=True)
+                    yield Button("Execute", id="execute_btn", variant="primary", flat=True)
             with Container(classes="results-panel"):
                 yield ResultViewer()
         yield Footer()
