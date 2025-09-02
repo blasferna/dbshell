@@ -444,15 +444,24 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="DBShell - A TUI SQL Query Editor and Executor",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        add_help=False,
         epilog="""
 Examples:
   %(prog)s --host localhost --user root --password mypass --database testdb
   %(prog)s --host 192.168.1.100 --user admin --password secret --database production --port 3307
+  %(prog)s -h localhost -u user -p pass -d mydb -P 3306
         """
     )
     
+    # Add manual help argument
     parser.add_argument(
-        "--host",
+        "--help",
+        action="help",
+        help="Show this help message and exit"
+    )
+    
+    parser.add_argument(
+        "--host", "-h",
         required=True,
         help="Database host (required)"
     )
@@ -476,7 +485,7 @@ Examples:
     )
     
     parser.add_argument(
-        "--port",
+        "--port", "-P",
         type=int,
         default=3306,
         help="Database port (default: 3306)"
