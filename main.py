@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-DBShell - A TUI SQL Query Editor and Executor
-A modern database shell with advanced query editing and result viewing capabilities.
-"""
-
 import argparse
 import sys
 from typing import Optional, List, Tuple
