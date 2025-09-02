@@ -1,0 +1,10 @@
+[project]
+name = "dbshell"
+version = "0.1.0"
+description = "A simple SQL query editor and executor TUI application"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "textual>=0.41.0",
+    "mysql-connector-python>=8.0.33"
+]
