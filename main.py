@@ -160,7 +160,7 @@ class DBShellApp(App):
     }
     
     .editor-panel {
-        height: 60%;
+        height: 30%;
     }
     
     .execute-panel {
@@ -172,7 +172,7 @@ class DBShellApp(App):
     }
     
     .results-panel {
-        height: 40%;
+        height: 60%;
     }
     
     /* Simple DataTable */
@@ -228,9 +228,6 @@ class DBShellApp(App):
             self.connected = False
             self.notify(message, severity="error")
         
-        # Set initial query in editor
-        query_editor = self.query_one("#query_editor", TextArea)
-        query_editor.text = "-- Enter your SQL query here\n-- Use Ctrl+E to execute\nSELECT 1 as test_column;"
     
     def get_current_editor(self) -> TextArea:
         """Get the query editor."""
