@@ -13,62 +13,27 @@ from mysql.connector import Error as MySQLError
 from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, Container
-from textual.widgets import (
-    Button, DataTable, Footer, Header, TextArea
-)
+from textual.widgets import Button, DataTable, Footer, Header, TextArea
 
 
-class QueryEditor(Container):
-    """Simple query editor."""
-    
-    DEFAULT_CSS = """
-    QueryEditor {
-        height: 1fr;
-    }
-    
-    QueryEditor TextArea {
-        height: 1fr;
-        border: none !important;
-        margin: 0;
-        padding: 1;
-    }
-    
-    QueryEditor TextArea:focus {
-        border: none !important;
-        margin: 0;
-        padding: 1;
-    }
-    """
-    
+class QueryEditor(TextArea):
     BINDINGS = [
         ("ctrl+e", "execute_query", "Execute Query"),
         ("ctrl+a", "select_all", "Select All"),
     ]
-    
-    def compose(self) -> ComposeResult:
-        """Create simple query editor layout."""
-        yield TextArea(
-            id="query_editor",
-            show_line_numbers=True,
-            language="sql",
-        )
-    
-    async def on_key(self, event) -> None:
-        """Handle key events and bubble up Ctrl+E."""
-        if event.key == "ctrl+e":
-            # Let the parent app handle this
-            event.stop()
-            await self.app.action_execute_query()
-        if event.key == "ctrl+a":
-            # Select all text in the editor
-            editor = self.query_one("#query_editor", TextArea)
-            editor.select_all()
-            event.stop()
+
+    async def action_execute_query(self) -> None:
+        """Handle Ctrl+E keyboard shortcut."""
+        await self.app.action_execute_query()
+
+    async def action_select_all(self) -> None:
+        """Handle Ctrl+A to select all text in the editor."""
+        self.select_all()
 
 
 class ResultViewer(Container):
     """Simple result viewer."""
-    
+
     DEFAULT_CSS = """
     ResultViewer {
         height: 1fr;
@@ -79,7 +44,7 @@ class ResultViewer(Container):
         border: none;
     }
     """
-    
+
     def compose(self) -> ComposeResult:
         """Create result viewer layout."""
         yield DataTable(id="results_table", zebra_stripes=True, cursor_type="row")
@@ -227,7 +192,11 @@ class DBShellApp(App):
         yield Header()
         with Vertical(classes="main-container"):
             with Container(classes="editor-panel"):
-                yield QueryEditor()
+                yield QueryEditor(
+                    id="query_editor",
+                    show_line_numbers=True,
+                    language="sql",
+                )
             with Horizontal(classes="execute-panel"):
                 yield Button("◀ Previous", id="prev_record_btn", variant="default", flat=True, disabled=True)
                 yield Button("Next ▶", id="next_record_btn", variant="default", flat=True, disabled=True)
@@ -319,15 +288,6 @@ class DBShellApp(App):
         if 0 <= new_index < len(self.current_rows):
             self.current_record_index = new_index
             await self.update_results_table(self.current_columns, self.current_rows)
-    
-    async def action_new_tab(self) -> None:
-        """Handle Ctrl+N - not used anymore."""
-        pass
-    
-    async def action_close_tab(self) -> None:
-        """Handle Ctrl+W for closing tab (clear current tab)."""
-        current_editor = self.get_current_editor()
-        current_editor.text = ""
     
     async def execute_query(self) -> None:
         """Execute the SQL query from the current editor."""
