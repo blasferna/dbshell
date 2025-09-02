@@ -71,7 +71,7 @@ class ResultViewer(Container):
     """
     
     def compose(self) -> ComposeResult:
-        """Create simple result viewer layout."""
+        """Create result viewer layout."""
         yield DataTable(id="results_table", zebra_stripes=True, cursor_type="row")
 
 
@@ -197,6 +197,7 @@ class DBShellApp(App):
     
     BINDINGS = [
         ("ctrl+e", "execute_query", "Execute Query"),
+        ("ctrl+v", "toggle_view", "Toggle View"),
         ("ctrl+q", "quit", "Quit"),
         ("ctrl+c", "quit", "Quit"),
     ]
@@ -205,6 +206,11 @@ class DBShellApp(App):
         super().__init__(**kwargs)
         self.db_connection = db_connection
         self.connected = False
+        self.is_vertical_view = False
+        self.current_columns = []
+        self.current_rows = []
+        self.current_record_index = 0
+        self.selected_record_index = None
     
     def compose(self) -> ComposeResult:
         """Create the main modern application layout."""
@@ -213,6 +219,9 @@ class DBShellApp(App):
             with Container(classes="editor-panel"):
                 yield QueryEditor()
             with Horizontal(classes="execute-panel"):
+                yield Button("◀ Previous", id="prev_record_btn", variant="default", flat=True, disabled=True)
+                yield Button("Next ▶", id="next_record_btn", variant="default", flat=True, disabled=True)
+                yield Button("Vertical View", id="toggle_view_btn", variant="default", flat=True)
                 yield Button("Execute", id="execute_btn", variant="primary", flat=True)
             with Container(classes="results-panel"):
                 yield ResultViewer()
@@ -242,9 +251,64 @@ class DBShellApp(App):
         """Handle execute button press."""
         await self.execute_query()
     
+    @on(Button.Pressed, "#toggle_view_btn")
+    async def toggle_view_button(self) -> None:
+        """Handle view toggle button press."""
+        await self.action_toggle_view()
+    
+    @on(Button.Pressed, "#prev_record_btn")
+    async def prev_record_button(self) -> None:
+        """Handle previous record button press."""
+        await self.navigate_record(-1)
+    
+    @on(Button.Pressed, "#next_record_btn")
+    async def next_record_button(self) -> None:
+        """Handle next record button press."""
+        await self.navigate_record(1)
+    
+    @on(DataTable.RowSelected)
+    async def on_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Handle row selection in horizontal view."""
+        if not self.is_vertical_view and self.current_rows:
+            # Store the selected record index but don't change view
+            self.selected_record_index = event.cursor_row
+    
     async def action_execute_query(self) -> None:
         """Handle Ctrl+E keyboard shortcut."""
         await self.execute_query()
+    
+    async def action_toggle_view(self) -> None:
+        """Handle Ctrl+V keyboard shortcut to toggle view."""
+        self.is_vertical_view = not self.is_vertical_view
+        
+        # Update button text
+        toggle_btn = self.query_one("#toggle_view_btn", Button)
+        if self.is_vertical_view:
+            toggle_btn.label = "Horizontal View"
+            # When switching to vertical view, use the selected record if available
+            if self.selected_record_index is not None and self.current_rows:
+                self.current_record_index = self.selected_record_index
+            elif self.current_rows:
+                # If no record was selected, show the first one
+                self.current_record_index = 0
+        else:
+            toggle_btn.label = "Vertical View"
+        
+        # Refresh the table with current data if available
+        if self.current_columns and self.current_rows:
+            await self.update_results_table(self.current_columns, self.current_rows)
+    
+    async def navigate_record(self, direction: int) -> None:
+        """Navigate to previous (-1) or next (1) record in vertical view."""
+        if not self.is_vertical_view or not self.current_rows:
+            return
+        
+        new_index = self.current_record_index + direction
+        
+        # Check bounds
+        if 0 <= new_index < len(self.current_rows):
+            self.current_record_index = new_index
+            await self.update_results_table(self.current_columns, self.current_rows)
     
     async def action_new_tab(self) -> None:
         """Handle Ctrl+N - not used anymore."""
@@ -274,14 +338,31 @@ class DBShellApp(App):
         if success:
             # Update results table if we have data
             if columns and rows is not None:
+                # Store current data for view toggling
+                self.current_columns = columns
+                self.current_rows = rows
+                self.current_record_index = 0
+                self.selected_record_index = None
+                # Reset to horizontal view for new queries
+                self.is_vertical_view = False
+                toggle_btn = self.query_one("#toggle_view_btn", Button)
+                toggle_btn.label = "Vertical View"
                 await self.update_results_table(columns, rows)
             else:
-                # Clear table for non-SELECT queries
+                # Clear stored data and table for non-SELECT queries
+                self.current_columns = []
+                self.current_rows = []
+                self.current_record_index = 0
+                self.selected_record_index = None
                 results_table = self.query_one("#results_table", DataTable)
                 results_table.clear(columns=True)
         else:
             self.notify(message, severity="error")
-            # Clear table on error
+            # Clear stored data and table on error
+            self.current_columns = []
+            self.current_rows = []
+            self.current_record_index = 0
+            self.selected_record_index = None
             results_table = self.query_one("#results_table", DataTable)
             results_table.clear(columns=True)
     
@@ -295,6 +376,19 @@ class DBShellApp(App):
         if not columns:
             return
         
+        if self.is_vertical_view:
+            # Vertical view: show records as Column/Value pairs
+            await self.update_vertical_view(results_table, columns, rows)
+        else:
+            # Horizontal view: traditional table format
+            await self.update_horizontal_view(results_table, columns, rows)
+        
+        # Update navigation buttons state
+        if self.is_vertical_view and rows:
+            await self.update_navigation_buttons()
+    
+    async def update_horizontal_view(self, results_table: DataTable, columns: List[str], rows: List[Tuple]) -> None:
+        """Update table in traditional horizontal view."""
         # Add columns with enhanced styling
         for column in columns:
             results_table.add_column(column, key=column)
@@ -317,6 +411,57 @@ class DBShellApp(App):
                 else:
                     str_row.append(str(value))
             results_table.add_row(*str_row)
+    
+    async def update_vertical_view(self, results_table: DataTable, columns: List[str], rows: List[Tuple]) -> None:
+        """Update table in vertical view showing each record as Column/Value pairs."""
+        # Add two columns: Column and Value
+        results_table.add_column("Column", key="column")
+        results_table.add_column("Value", key="value")
+        
+        if not rows:
+            return
+        
+        # Ensure current_record_index is within bounds
+        if self.current_record_index >= len(rows):
+            self.current_record_index = 0
+        
+        # Show the current record in vertical format
+        current_row = rows[self.current_record_index]
+        
+        # Add header showing current record info
+        if len(rows) > 1:
+            results_table.add_row(
+                "[bold]Record {} of {}[/bold]".format(self.current_record_index + 1, len(rows)), 
+                ""
+            )
+            results_table.add_row("", "")
+        
+        # Show the current record in vertical format
+        for i, (column_name, value) in enumerate(zip(columns, current_row)):
+            # Format the value
+            if value is None:
+                formatted_value = "[dim]NULL[/dim]"
+            elif isinstance(value, (int, float)):
+                formatted_value = str(value)
+            elif isinstance(value, str):
+                # Don't truncate in vertical view as we have more space
+                formatted_value = value
+            else:
+                formatted_value = str(value)
+            
+            results_table.add_row(column_name, formatted_value)
+    
+    async def update_navigation_buttons(self) -> None:
+        """Update the state of navigation buttons."""
+        if not self.current_rows:
+            return
+        
+        prev_btn = self.query_one("#prev_record_btn", Button)
+        next_btn = self.query_one("#next_record_btn", Button)
+        
+        # Enable/disable buttons based on current position
+        prev_btn.disabled = self.current_record_index <= 0
+        next_btn.disabled = self.current_record_index >= len(self.current_rows) - 1
     
     async def action_quit(self) -> None:
         """Handle quit action."""
