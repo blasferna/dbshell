@@ -13,6 +13,6 @@ uv tool install git+https://github.com/blasferna/dbshell.git
 ## Usage
 
 ```
-dbshell --host <hostname> --user <username> --password <password> --database <database_name> [--port <port>]
+dbshell --host <hostname> --user <username> --password <password> [--database <database_name>] [--port <port>]
 ``` 
 
