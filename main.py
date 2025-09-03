@@ -7,7 +7,7 @@ from mysql.connector import Error as MySQLError
 from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, Container
-from textual.widgets import Button, DataTable, Footer, Header, TextArea, Select
+from textual.widgets import Button, DataTable, Footer, TextArea, Select, Static
 
 
 class QueryEditor(TextArea):
@@ -27,19 +27,6 @@ class QueryEditor(TextArea):
 
 class EditorPanel(Container):
     """Container for the query editor."""
-
-    DEFAULT_CSS = """
-    EditorPanel {
-        height: 30%;
-        border: solid $secondary;
-        border-title-align: left;
-    }
-    
-    EditorPanel:focus-within {
-        border: solid $primary;
-    }
-    
-    """
 
     def compose(self) -> ComposeResult:
         """Create editor panel layout."""
@@ -231,11 +218,25 @@ class DBShellApp(App):
         layout: vertical;
         height: 1fr;
     }
+    
+    EditorPanel {
+        height: 37%;
+        border: solid $secondary;
+        border-title-align: left;
+    }
+    
+    EditorPanel:focus-within {
+        border: solid $primary;
+    }
 
     .button-group {
         layout: horizontal;
         align: right middle;
         width: 70%;
+    }
+    
+    .action-panel {
+        height: 1;
     }
     
     Button {
@@ -252,7 +253,21 @@ class DBShellApp(App):
         layout: horizontal;
         align: left middle;
         width: 30%;
+        margin-left: 1;
     }
+    
+    Select {
+        height: 1;
+        border: none;
+        padding: 0;
+    }
+    
+    Select SelectCurrent {
+        height: 1;
+        border: none;
+        padding: 0 1;
+    }
+  
     
     #database_select {
         width: 30;
@@ -331,7 +346,7 @@ class DBShellApp(App):
                         variant="default",
                     )
                     yield Button(
-                        "Execute", id="execute_btn", variant="primary",
+                        "Run", id="run_btn", variant="primary",
                     )
             with Container(classes="results-panel"):
                 yield ResultViewer()
@@ -457,7 +472,7 @@ class DBShellApp(App):
         """Update results info silently."""
         pass
 
-    @on(Button.Pressed, "#execute_btn")
+    @on(Button.Pressed, "#run_btn")
     async def execute_query_button(self) -> None:
         """Handle execute button press."""
         await self.execute_query()
