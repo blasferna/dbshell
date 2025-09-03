@@ -25,22 +25,54 @@ class QueryEditor(TextArea):
         self.select_all()
 
 
+class EditorPanel(Container):
+    """Container for the query editor."""
+
+    DEFAULT_CSS = """
+    EditorPanel {
+        height: 30%;
+        border: solid $secondary;
+        border-title-align: left;
+    }
+    
+    EditorPanel:focus-within {
+        border: solid $primary;
+    }
+    
+    """
+
+    def compose(self) -> ComposeResult:
+        """Create editor panel layout."""
+        self.border_title = "Query Editor"
+        yield QueryEditor(
+            id="query_editor",
+            show_line_numbers=True,
+            language="sql",
+        )
+
+
 class ResultViewer(Container):
     """Simple result viewer."""
 
     DEFAULT_CSS = """
     ResultViewer {
         height: 1fr;
+        border: solid $secondary;
+        border-title-align: left;
+    }
+    
+    ResultViewer:focus-within {
+        border: solid $primary;
     }
     
     ResultViewer DataTable {
         height: 1fr;
-        border: none;
     }
     """
 
     def compose(self) -> ComposeResult:
         """Create result viewer layout."""
+        self.border_title = "Query Results"
         yield DataTable(id="results_table", zebra_stripes=True, cursor_type="row")
 
 
@@ -199,15 +231,21 @@ class DBShellApp(App):
         layout: vertical;
         height: 1fr;
     }
-    
-    .editor-panel {
-        height: 30%;
-    }
 
     .button-group {
         layout: horizontal;
         align: right middle;
         width: 70%;
+    }
+    
+    Button {
+        padding: 0 1;
+        height: 1;
+        border: none;
+        text-style: none;
+        min-width: 0;
+        width: auto;
+        margin: 0 1;
     }
     
     .select-database-container {
@@ -265,12 +303,7 @@ class DBShellApp(App):
     def compose(self) -> ComposeResult:
         """Create the main modern application layout."""
         with Vertical(classes="main-container"):
-            with Container(classes="editor-panel"):
-                yield QueryEditor(
-                    id="query_editor",
-                    show_line_numbers=True,
-                    language="sql",
-                )
+            yield EditorPanel()
             with Horizontal(classes="action-panel"):
                 with Container(classes="select-database-container"):
                     yield Select(
@@ -284,24 +317,21 @@ class DBShellApp(App):
                         "◀ Previous",
                         id="prev_record_btn",
                         variant="default",
-                        flat=True,
                         disabled=True,
                     )
                     yield Button(
                         "Next ▶",
                         id="next_record_btn",
                         variant="default",
-                        flat=True,
                         disabled=True,
                     )
                     yield Button(
                         "Vertical View",
                         id="toggle_view_btn",
                         variant="default",
-                        flat=True,
                     )
                     yield Button(
-                        "Execute", id="execute_btn", variant="primary", flat=True
+                        "Execute", id="execute_btn", variant="primary",
                     )
             with Container(classes="results-panel"):
                 yield ResultViewer()
@@ -550,6 +580,8 @@ class DBShellApp(App):
                     cmd in query_upper for cmd in ["CREATE DATABASE", "DROP DATABASE"]
                 ):
                     await self.refresh_databases()
+            results_viewer = self.query_one("ResultViewer")
+            results_viewer.border_title = f"Query Results ({len(rows) if rows else 0} rows)"
 
         else:
             self.notify(message, severity="error")
