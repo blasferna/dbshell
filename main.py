@@ -59,7 +59,7 @@ class ResultViewer(Container):
 
     def compose(self) -> ComposeResult:
         """Create result viewer layout."""
-        self.border_title = "Query Results"
+        self.border_title = "Results"
         yield DataTable(id="results_table", zebra_stripes=True, cursor_type="row")
 
 
@@ -314,6 +314,7 @@ class DBShellApp(App):
         self.current_rows = []
         self.current_record_index = 0
         self.selected_record_index = None
+        self.title = "Dbshell"
 
     def compose(self) -> ComposeResult:
         """Create the main modern application layout."""
@@ -596,7 +597,7 @@ class DBShellApp(App):
                 ):
                     await self.refresh_databases()
             results_viewer = self.query_one("ResultViewer")
-            results_viewer.border_title = f"Query Results ({len(rows) if rows else 0} rows)"
+            results_viewer.border_title = f"Results ({len(rows) if rows else 0} rows)"
 
         else:
             self.notify(message, severity="error")
