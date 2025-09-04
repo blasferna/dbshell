@@ -2,7 +2,7 @@
 
 A simple Text User Interface (TUI) application for executing SQL queries against MySQL databases.
 
-![screenshot](https://github.com/user-attachments/assets/5831a3d0-d619-4e66-a6fc-c1ab8cba9ab4)
+![screenshot](https://github.com/user-attachments/assets/5cace5fb-371e-445f-8203-aea65cb9234d)
 
 > [!WARNING]
 > This project is in early development. Currently the code is a bit messy, Prs are welcome!
