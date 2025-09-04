@@ -1,20 +1,181 @@
 import argparse
 import sys
-from typing import Optional, List, Tuple
+from dataclasses import dataclass
+from typing import cast
 
 import mysql.connector
 from mysql.connector import Error as MySQLError
-from textual import on
+from textual import events, on
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical, Container
-from textual.widgets import Button, DataTable, Footer, TextArea, Select, Static
+from textual.binding import Binding
+from textual.containers import Container, Horizontal, Vertical
+from textual.content import Content
+from textual.widgets import (
+    Button,
+    DataTable,
+    Footer,
+    OptionList,
+    Select,
+    TextArea,
+)
+from textual.widgets.option_list import Option
+
+from suggestion_provider import SQL_PARSER, SuggestionProvider
+
+
+@dataclass
+class TargetState:
+    text: str
+    """The content in the target widget."""
+
+    cursor_position: tuple[int, int]
+    """The cursor position in the target widget (line, column)."""
+
+
+class DropdownItem(Option):
+    def __init__(
+        self,
+        main: str | Content,
+        prefix: str | Content | None = None,
+        id: str | None = None,
+        disabled: bool = False,
+    ) -> None:
+        self.main = Content(main) if isinstance(main, str) else main
+        self.prefix = Content(prefix) if isinstance(prefix, str) else prefix
+        left = self.prefix
+        prompt = self.main
+        if left:
+            prompt = Content.assemble(left, self.main)
+
+        super().__init__(prompt, id, disabled)
+
+    @property
+    def value(self) -> str:
+        return self.main.plain
+
+
+class AutoComplete(Container):
+    DEFAULT_CSS = """
+    AutoComplete {
+        layer: tooltips;
+        display: none;
+        width: 30;
+        height: auto;
+        max-height: 10;
+        background: $surface;
+        border: solid $accent;
+    }
+    AutoComplete OptionList {
+        border: none;
+        background: $surface;
+        height: auto;
+        scrollbar-size-vertical: 1;
+    }
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._option_list = OptionList()
+        self._target_state = TargetState("", (0, 0))
+
+    def compose(self) -> ComposeResult:
+        self._option_list.can_focus = False
+        yield self._option_list
+
+    def show_suggestions(self, suggestions: list[str], position: tuple = None):
+        if not suggestions:
+            self.display = False
+            return
+
+        # Reset offset first to avoid accumulation
+        self.styles.offset = (0, 0)
+
+        # Set position if provided
+        if position:
+            self.styles.offset = position
+
+        # Convert suggestions to DropdownItem objects
+        dropdown_items = [DropdownItem(main=suggestion) for suggestion in suggestions]
+
+        self._option_list.clear_options()
+        self._option_list.add_options(dropdown_items)
+
+        self.display = True
+        if self._option_list.option_count > 0:
+            self._option_list.highlighted = 0
+
+    def hide(self):
+        self.display = False
+        # Reset offset when hiding
+        self.styles.offset = (0, 0)
+
+    def move_cursor(self, down: bool = True):
+        """Move cursor up or down in the suggestion list."""
+        if not self.display or self._option_list.option_count == 0:
+            return
+
+        current_index = self._option_list.highlighted or 0
+
+        if down:
+            new_index = min(current_index + 1, self._option_list.option_count - 1)
+        else:
+            new_index = max(current_index - 1, 0)
+
+        self._option_list.highlighted = new_index
+
+    def get_selected_suggestion(self) -> str:
+        """Get the currently selected suggestion."""
+        if not self.display or self._option_list.option_count == 0:
+            return ""
+
+        current_index = self._option_list.highlighted
+        if current_index is None or current_index >= self._option_list.option_count:
+            return ""
+
+        try:
+            option = cast(
+                DropdownItem, self._option_list.get_option_at_index(current_index)
+            )
+            return option.value
+        except:
+            return ""
+
+    def update_target_state(self, text: str, cursor_position: tuple[int, int]):
+        """Update the cached target state."""
+        self._target_state = TargetState(text, cursor_position)
+
+    def get_current_word_bounds(self) -> tuple[tuple[int, int], tuple[int, int]]:
+        """Get the start and end positions of the current word being typed."""
+        cursor_line, cursor_col = self._target_state.cursor_position
+        text_lines = self._target_state.text.split("\n")
+
+        if cursor_line >= len(text_lines):
+            return (cursor_line, cursor_col), (cursor_line, cursor_col)
+
+        current_line = text_lines[cursor_line]
+
+        # Find start of current word
+        start_col = cursor_col
+        while start_col > 0 and current_line[start_col - 1].isalnum():
+            start_col -= 1
+
+        # Find end of current word
+        end_col = cursor_col
+        while end_col < len(current_line) and current_line[end_col].isalnum():
+            end_col += 1
+
+        return (cursor_line, start_col), (cursor_line, end_col)
 
 
 class QueryEditor(TextArea):
     BINDINGS = [
-        ("ctrl+e", "execute_query", "Execute Query"),
-        ("ctrl+a", "select_all", "Select All"),
+        Binding("ctrl+e", "execute_query", "Execute Query"),
+        Binding("ctrl+a", "select_all", "Select All"),
     ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.suggestion_provider = None
 
     async def action_execute_query(self) -> None:
         """Handle Ctrl+E keyboard shortcut."""
@@ -23,6 +184,89 @@ class QueryEditor(TextArea):
     async def action_select_all(self) -> None:
         """Handle Ctrl+A to select all text in the editor."""
         self.select_all()
+
+    def action_accept_suggestion(self) -> None:
+        autocomplete = self.app.query_one(AutoComplete)
+        if autocomplete.display:
+            suggestion = autocomplete.get_selected_suggestion()
+            if suggestion:
+                self._apply_suggestion(suggestion)
+                autocomplete.hide()
+
+    def _apply_suggestion(self, suggestion: str) -> None:
+        """Apply the selected suggestion to the text area."""
+        # Get current cursor position
+        cursor_line, cursor_col = self.cursor_location
+        text_lines = self.text.split("\n")
+
+        if cursor_line < len(text_lines):
+            current_line = text_lines[cursor_line]
+
+            # Parse to find what we're replacing using tree-sitter
+            tree = SQL_PARSER.parse(bytes(self.text, "utf8"))
+            point = (cursor_line, cursor_col)
+            leaf = tree.root_node.descendant_for_point_range(point, point)
+
+            if leaf and leaf.type == "identifier":
+                # Replace the identifier
+                start_line, start_col = leaf.start_point
+                end_line, end_col = leaf.end_point
+
+                # Replace the text
+                self.replace(suggestion, (start_line, start_col), (end_line, end_col))
+            else:
+                # Find word boundaries for partial completion
+                start_col = cursor_col
+                end_col = cursor_col
+
+                # Find start of current word (look for word characters)
+                while start_col > 0 and (
+                    current_line[start_col - 1].isalnum()
+                    or current_line[start_col - 1] == "_"
+                ):
+                    start_col -= 1
+
+                # Find end of current word
+                while end_col < len(current_line) and (
+                    current_line[end_col].isalnum() or current_line[end_col] == "_"
+                ):
+                    end_col += 1
+
+                # Replace the word or insert at cursor
+                if start_col < end_col:
+                    # There's a partial word to replace
+                    self.replace(
+                        suggestion, (cursor_line, start_col), (cursor_line, end_col)
+                    )
+                else:
+                    # No word to replace, just insert
+                    self.insert(suggestion, (cursor_line, cursor_col))
+
+    @on(events.Key)
+    def on_key(self, event: events.Key) -> None:
+        autocomplete = self.app.query_one(AutoComplete)
+
+        if autocomplete.display:
+            if event.key == "escape":
+                autocomplete.hide()
+                event.prevent_default()
+            elif event.key == "up":
+                autocomplete.move_cursor(down=False)
+                event.prevent_default()
+                event.stop()  # Stop event propagation
+            elif event.key == "down":
+                autocomplete.move_cursor(down=True)
+                event.prevent_default()
+                event.stop()  # Stop event propagation
+            elif event.key == "enter":
+                self.action_accept_suggestion()
+                event.prevent_default()
+                event.stop()  # Stop event propagation
+            elif event.key == "space":
+                # Hide autocomplete on space
+                autocomplete.hide()
+        elif event.key == "escape":
+            autocomplete.hide()
 
 
 class EditorPanel(Container):
@@ -36,6 +280,7 @@ class EditorPanel(Container):
             show_line_numbers=True,
             language="sql",
         )
+        yield AutoComplete()
 
 
 class ResultViewer(Container):
@@ -71,7 +316,7 @@ class DatabaseConnection:
         host: str,
         user: str,
         password: str,
-        database: Optional[str] = None,
+        database: str | None = None,
         port: int = 3306,
     ):
         self.host = host
@@ -79,10 +324,10 @@ class DatabaseConnection:
         self.password = password
         self.database = database
         self.port = port
-        self.connection: Optional[mysql.connector.MySQLConnection] = None
-        self.cursor: Optional[mysql.connector.cursor.MySQLCursor] = None
+        self.connection: mysql.connector.MySQLConnection | None = None
+        self.cursor: mysql.connector.cursor.MySQLCursor | None = None
 
-    def connect(self, database: Optional[str] = None) -> Tuple[bool, str]:
+    def connect(self, database: str | None = None) -> tuple[bool, str]:
         """
         Establish database connection.
         Args:
@@ -117,7 +362,7 @@ class DatabaseConnection:
         except MySQLError as e:
             return False, f"Connection failed: {str(e)}"
 
-    def get_databases(self) -> Tuple[bool, str, Optional[List[str]]]:
+    def get_databases(self) -> tuple[bool, str, list[str] | None]:
         """
         Get list of available databases.
         Returns: (success: bool, message: str, databases: Optional[List[str]])
@@ -139,7 +384,7 @@ class DatabaseConnection:
         except MySQLError as e:
             return False, f"Error getting databases: {str(e)}", None
 
-    def change_database(self, database: str) -> Tuple[bool, str]:
+    def change_database(self, database: str) -> tuple[bool, str]:
         """
         Change to a different database.
         Returns: (success: bool, message: str)
@@ -154,9 +399,16 @@ class DatabaseConnection:
         except MySQLError as e:
             return False, f"Error changing database: {str(e)}"
 
-    def execute_query(
-        self, query: str
-    ) -> Tuple[bool, str, Optional[List], Optional[List]]:
+    def get_tables(self) -> tuple[list[str], str | None]:
+        if not self.database or not self.cursor:
+            return [], "No database selected"
+        try:
+            self.cursor.execute("SHOW TABLES")
+            return [row[0] for row in self.cursor.fetchall()], None
+        except MySQLError as e:
+            return [], str(e)
+
+    def execute_query(self, query: str) -> tuple[bool, str, list | None, list | None]:
         """
         Execute SQL query.
         Returns: (success: bool, message: str, columns: Optional[List], rows: Optional[List])
@@ -315,6 +567,7 @@ class DBShellApp(App):
         self.current_record_index = 0
         self.selected_record_index = None
         self.title = "Dbshell"
+        self.suggestion_provider = SuggestionProvider(self.db_connection)
 
     def compose(self) -> ComposeResult:
         """Create the main modern application layout."""
@@ -347,7 +600,9 @@ class DBShellApp(App):
                         variant="default",
                     )
                     yield Button(
-                        "Run", id="run_btn", variant="primary",
+                        "Run",
+                        id="run_btn",
+                        variant="primary",
                     )
             with Container(classes="results-panel"):
                 yield ResultViewer()
@@ -355,6 +610,9 @@ class DBShellApp(App):
 
     async def on_mount(self) -> None:
         """Initialize the application after mounting."""
+        editor = self.query_one(QueryEditor)
+        editor.suggestion_provider = self.suggestion_provider
+
         # Try to connect to database (without selecting a specific database first)
         success, message = self.db_connection.connect()
         if success:
@@ -437,6 +695,74 @@ class DBShellApp(App):
             results_table.clear(columns=True)
         else:
             self.notify(message, severity="error")
+
+    @on(TextArea.Changed, "#query_editor")
+    async def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        autocomplete = self.query_one(AutoComplete)
+
+        text = event.text_area.text
+        cursor_pos = event.text_area.cursor_location
+
+        # Get the current word being typed
+        current_word = self._get_current_word(text, cursor_pos)
+
+        # Get suggestions from the provider
+        suggestions = self.suggestion_provider.get_suggestions(text, cursor_pos)
+
+        # Filter suggestions based on current word if there is one
+        if current_word and suggestions:
+            filtered_suggestions = [
+                s for s in suggestions if s.lower().startswith(current_word.lower())
+            ]
+            suggestions = filtered_suggestions if filtered_suggestions else suggestions
+
+        if suggestions:
+            # Calculate the position relative to the TextArea
+            row, col = cursor_pos
+
+            # Get the TextArea widget
+            text_area = event.text_area
+
+            # Calculate absolute position based on TextArea's position
+            text_area_region = text_area.region
+
+            # Position it below the cursor line, accounting for TextArea's position
+            absolute_row = text_area_region.y + row + 1
+            absolute_col = text_area_region.x + col
+
+            # If line numbers are shown, add offset for line number column
+            if text_area.show_line_numbers:
+                absolute_col += 4
+
+            autocomplete.show_suggestions(suggestions, (absolute_col, absolute_row))
+        else:
+            autocomplete.hide()
+
+    def _get_current_word(self, text: str, cursor_pos: tuple) -> str:
+        """Get the current word being typed at cursor position."""
+        row, col = cursor_pos
+        lines = text.split("\n")
+
+        if row >= len(lines):
+            return ""
+
+        current_line = lines[row]
+
+        # Find the start of the current word
+        start = col
+        while start > 0 and (
+            current_line[start - 1].isalnum() or current_line[start - 1] == "_"
+        ):
+            start -= 1
+
+        # Find the end of the current word
+        end = col
+        while end < len(current_line) and (
+            current_line[end].isalnum() or current_line[end] == "_"
+        ):
+            end += 1
+
+        return current_line[start:col] if start < col else ""
 
     @on(Select.Changed, "#database_select")
     async def on_database_changed(self, event: Select.Changed) -> None:
@@ -609,7 +935,7 @@ class DBShellApp(App):
             results_table = self.query_one("#results_table", DataTable)
             results_table.clear(columns=True)
 
-    async def update_results_table(self, columns: List[str], rows: List[Tuple]) -> None:
+    async def update_results_table(self, columns: list[str], rows: list[tuple]) -> None:
         """Update the results table with query results."""
         results_table = self.query_one("#results_table", DataTable)
 
@@ -631,7 +957,7 @@ class DBShellApp(App):
             await self.update_navigation_buttons()
 
     async def update_horizontal_view(
-        self, results_table: DataTable, columns: List[str], rows: List[Tuple]
+        self, results_table: DataTable, columns: list[str], rows: list[tuple]
     ) -> None:
         """Update table in traditional horizontal view."""
         # Add columns with enhanced styling
@@ -658,7 +984,7 @@ class DBShellApp(App):
             results_table.add_row(*str_row)
 
     async def update_vertical_view(
-        self, results_table: DataTable, columns: List[str], rows: List[Tuple]
+        self, results_table: DataTable, columns: list[str], rows: list[tuple]
     ) -> None:
         """Update table in vertical view showing each record as Column/Value pairs."""
         # Add two columns: Column and Value
@@ -678,15 +1004,15 @@ class DBShellApp(App):
         # Add header showing current record info
         if len(rows) > 1:
             results_table.add_row(
-                "[bold]Record {} of {}[/bold]".format(
-                    self.current_record_index + 1, len(rows)
-                ),
+                f"[bold]Record {self.current_record_index + 1} of {len(rows)}[/bold]",
                 "",
             )
             results_table.add_row("", "")
 
         # Show the current record in vertical format
-        for i, (column_name, value) in enumerate(zip(columns, current_row)):
+        for i, (column_name, value) in enumerate(
+            zip(columns, current_row, strict=False)
+        ):
             # Format the value
             if value is None:
                 formatted_value = "[dim]NULL[/dim]"
