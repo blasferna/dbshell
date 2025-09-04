@@ -31,7 +31,6 @@ dependencies = [
     "tree-sitter-sql>=0.3.8",
 ]
 
-
 [tool.ruff.lint]
 select = [
     # pycodestyle
@@ -53,7 +52,9 @@ dev = [
     "ruff>=0.12.11",
 ]
 
-
 [project.scripts]
-dbshell = "main:main"
+dbshell = "dbshell:main"
 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

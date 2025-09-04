@@ -20,7 +20,7 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
-from suggestion_provider import SQL_PARSER, SuggestionProvider
+from .suggestion_provider import SQL_PARSER, SuggestionProvider
 
 
 @dataclass

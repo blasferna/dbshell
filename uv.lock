@@ -5,7 +5,7 @@ requires-python = ">=3.11"
 [[package]]
 name = "dbshell"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "mysql-connector-python" },
     { name = "textual" },
