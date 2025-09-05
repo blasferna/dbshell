@@ -903,12 +903,4 @@ class SuggestionProvider:
 
     def _get_table_columns(self, table_name: str) -> list[str]:
         """Get columns for a specific table."""
-        if not self.db_connection.cursor or not self.db_connection.database:
-            return []
-
-        try:
-            self.db_connection.cursor.execute(f"DESCRIBE `{table_name}`")
-            columns = [row[0] for row in self.db_connection.cursor.fetchall()]
-            return columns
-        except Exception:
-            return []
+        return self.db_connection.get_columns(table_name)

@@ -20,7 +20,7 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
-from .suggestion_provider import SQL_PARSER, SuggestionProvider
+from dbshell.suggestion_provider import SQL_PARSER, SuggestionProvider
 
 
 @dataclass
@@ -407,6 +407,20 @@ class DatabaseConnection:
             return [row[0] for row in self.cursor.fetchall()], None
         except MySQLError as e:
             return [], str(e)
+        
+    def get_columns(self, table_name: str) -> list[str]:
+        """Get columns for a specific table."""
+        if not self.connection or not self.cursor:
+            return []
+
+        try:
+            #self.db_connection.cursor.execute(f"DESCRIBE `{table_name}`")
+            #columns = [row[0] for row in self.db_connection.cursor.fetchall()]
+            _, _, _, rows = self.execute_query(f"DESCRIBE `{table_name}`")
+            columns = [row[0] for row in rows]
+            return columns
+        except Exception:
+            return []
 
     def execute_query(self, query: str) -> tuple[bool, str, list | None, list | None]:
         """
