@@ -20,6 +20,7 @@ from textual.widgets.option_list import Option
 from tree_sitter import Parser
 
 from dbshell.database import DatabaseAdapter, DatabaseFactory
+from dbshell.explorer import ExplorerModal
 from dbshell.suggestion_provider import SuggestionProvider
 
 
@@ -169,6 +170,7 @@ class AutoComplete(Container):
 
 class QueryEditor(TextArea):
     BINDINGS = [
+        Binding("ctrl+e", "show_explorer", "Show Explorer"),
         Binding("ctrl+r", "execute_query", "Execute Query"),
         Binding("f8", "execute_query", "Execute Query"),
         Binding("ctrl+a", "select_all", "Select All"),
@@ -181,6 +183,10 @@ class QueryEditor(TextArea):
     async def action_execute_query(self) -> None:
         """Handle f8 keyboard shortcut."""
         await self.app.action_execute_query()
+        
+    async def action_show_explorer(self) -> None:
+        """Handle Ctrl+E to show database explorer."""
+        await self.app.action_show_explorer()
 
     async def action_select_all(self) -> None:
         """Handle Ctrl+A to select all text in the editor."""
@@ -411,6 +417,7 @@ class DBShellApp(App):
         ("ctrl+r", "execute_query", "Execute Query"),
         ("f8", "execute_query", "Execute Query"),
         ("ctrl+v", "toggle_view", "Toggle View"),
+        ("ctrl+e", "show_explorer", "Database Explorer"),
         ("ctrl+q", "quit", "Quit"),
         ("ctrl+c", "quit", "Quit"),
     ]
@@ -710,6 +717,17 @@ class DBShellApp(App):
         # Refresh the table with current data if available
         if self.current_columns and self.current_rows:
             await self.update_results_table(self.current_columns, self.current_rows)
+
+    async def action_show_explorer(self) -> None:
+        """Handle Ctrl+E keyboard shortcut to show database explorer."""
+        # Check if database is selected
+        if not self.adapter.database:
+            self.notify("Please select a database first", severity="warning")
+            return
+        
+        # Create and show the explorer modal
+        explorer_modal = ExplorerModal(self.adapter)
+        await self.push_screen(explorer_modal)
 
     async def navigate_record(self, direction: int) -> None:
         """Navigate to previous (-1) or next (1) record in vertical view."""

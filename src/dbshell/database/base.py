@@ -50,3 +50,17 @@ class DatabaseAdapter(ABC):
     def engine_name(self) -> str:
         """Return the name of the database engine."""
         pass
+
+    @abstractmethod
+    def get_database_objects(
+        self, database: str = None
+    ) -> tuple[bool, str, dict[str, list[str]] | None]:
+        """Get all database objects grouped by type."""
+        pass
+
+    @abstractmethod
+    def get_object_creation_sql(
+        self, obj_name: str, obj_type: str, database: str = None
+    ) -> tuple[bool, str, str | None]:
+        """Get the creation SQL for a database object."""
+        pass

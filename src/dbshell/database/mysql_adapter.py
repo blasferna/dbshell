@@ -16,6 +16,7 @@ class MySQLAdapter(DatabaseAdapter):
         self.password = connection_params.get("password", "")
         self.port = connection_params.get("port", 3306)
         self.database = connection_params.get("database")
+        self.current_database = self.database
         self.cursor: mysql.connector.cursor.MySQLCursor | None = None
 
     @property
@@ -81,20 +82,22 @@ class MySQLAdapter(DatabaseAdapter):
         try:
             self.cursor.execute(f"USE `{database}`")
             self.database = database
+            self.current_database = database
             return True, f"Changed to database: {database}"
         except MySQLError as e:
             return False, f"Error changing database: {str(e)}"
 
-    def get_tables(self) -> tuple[list[str], str | None]:
-        if not self.database or not self.cursor:
+    def get_tables(self, database: str = None) -> tuple[list[str], str | None]:
+        db_name = database or self.current_database
+        if not db_name or not self.cursor:
             return [], "No database selected"
         try:
-            self.cursor.execute("SHOW TABLES")
+            self.cursor.execute(f"SHOW TABLES FROM `{db_name}`")
             return [row[0] for row in self.cursor.fetchall()], None
         except MySQLError as e:
             return [], str(e)
 
-    def get_columns(self, table_name: str) -> list[str]:
+    def get_columns(self, table_name: str, database: str = None) -> list[str]:
         """Get columns for a specific table."""
         if not self.connection or not self.cursor:
             return []
@@ -146,3 +149,90 @@ class MySQLAdapter(DatabaseAdapter):
             self.cursor.close()
         if self.connection:
             self.connection.close()
+
+    def get_database_objects(
+        self, database: str = None
+    ) -> tuple[bool, str, dict[str, list[str]] | None]:
+        """Get all database objects grouped by type."""
+        if not self.connection or not self.cursor:
+            return False, "No database connection", None
+
+        db_name = database or self.current_database
+        if not db_name:
+            return False, "No database selected", None
+
+        try:
+            objects = {
+                "tables": [],
+                "views": [],
+                "procedures": [],
+                "functions": []
+            }
+
+            # Get tables
+            self.cursor.execute(f"SHOW TABLES FROM `{db_name}`")
+            objects["tables"] = [row[0] for row in self.cursor.fetchall()]
+
+            # Get views
+            self.cursor.execute("""
+                SELECT TABLE_NAME 
+                FROM INFORMATION_SCHEMA.VIEWS 
+                WHERE TABLE_SCHEMA = %s
+            """, (db_name,))
+            objects["views"] = [row[0] for row in self.cursor.fetchall()]
+
+            # Get procedures
+            self.cursor.execute("""
+                SELECT ROUTINE_NAME 
+                FROM INFORMATION_SCHEMA.ROUTINES 
+                WHERE ROUTINE_SCHEMA = %s AND ROUTINE_TYPE = 'PROCEDURE'
+            """, (db_name,))
+            objects["procedures"] = [row[0] for row in self.cursor.fetchall()]
+
+            # Get functions
+            self.cursor.execute("""
+                SELECT ROUTINE_NAME 
+                FROM INFORMATION_SCHEMA.ROUTINES 
+                WHERE ROUTINE_SCHEMA = %s AND ROUTINE_TYPE = 'FUNCTION'
+            """, (db_name,))
+            objects["functions"] = [row[0] for row in self.cursor.fetchall()]
+
+            total_objects = sum(len(obj_list) for obj_list in objects.values())
+            return True, f"Found {total_objects} objects", objects
+
+        except MySQLError as e:
+            return False, f"Error getting database objects: {str(e)}", None
+
+    def get_object_creation_sql(
+        self, obj_name: str, obj_type: str, database: str = None
+    ) -> tuple[bool, str, str | None]:
+        """Get the creation SQL for a database object."""
+        if not self.connection or not self.cursor:
+            return False, "No database connection", None
+
+        try:
+            # Map object types to SQL commands
+            sql_commands = {
+                "tables": f"SHOW CREATE TABLE `{obj_name}`",
+                "views": f"SHOW CREATE VIEW `{obj_name}`",
+                "procedures": f"SHOW CREATE PROCEDURE `{obj_name}`",
+                "functions": f"SHOW CREATE FUNCTION `{obj_name}`"
+            }
+            
+            sql = sql_commands.get(obj_type)
+            if not sql:
+                return False, f"Unsupported object type: {obj_type}", None
+
+            self.cursor.execute(sql)
+            result = self.cursor.fetchone()
+            
+            if result:
+                # Return the creation SQL (usually in the second column)
+                creation_sql = result[1] if len(result) > 1 else str(result[0])
+                message = f"Retrieved creation SQL for {obj_type[:-1]}: {obj_name}"
+                return True, message, creation_sql
+            else:
+                return False, f"No creation SQL found for {obj_name}", None
+
+        except MySQLError as e:
+            return False, f"Error getting creation SQL: {str(e)}", None

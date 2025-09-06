@@ -142,3 +142,82 @@ class SQLiteAdapter(DatabaseAdapter):
             self.cursor.close()
         if self.connection:
             self.connection.close()
+
+    def get_database_objects(
+        self, database: str = None
+    ) -> tuple[bool, str, dict[str, list[str]] | None]:
+        """Get all database objects grouped by type."""
+        if not self.connection or not self.cursor:
+            return False, "No database connection", None
+
+        try:
+            objects = {
+                "tables": [],
+                "views": [],
+                "procedures": [],
+                "functions": []
+            }
+
+            # Get tables
+            self.cursor.execute("""
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name NOT LIKE 'sqlite_%'
+                ORDER BY name
+            """)
+            objects["tables"] = [row[0] for row in self.cursor.fetchall()]
+
+            # Get views
+            self.cursor.execute("""
+                SELECT name FROM sqlite_master 
+                WHERE type='view'
+                ORDER BY name
+            """)
+            objects["views"] = [row[0] for row in self.cursor.fetchall()]
+
+            # SQLite doesn't support stored procedures/functions natively
+            objects["procedures"] = []
+            objects["functions"] = []
+
+            total_objects = sum(len(obj_list) for obj_list in objects.values())
+            return True, f"Found {total_objects} objects", objects
+
+        except sqlite3.Error as e:
+            return False, f"Error getting database objects: {str(e)}", None
+
+    def get_object_creation_sql(
+        self, obj_name: str, obj_type: str, database: str = None
+    ) -> tuple[bool, str, str | None]:
+        """Get the creation SQL for a database object."""
+        if not self.connection or not self.cursor:
+            return False, "No database connection", None
+
+        try:
+            if obj_type == "tables":
+                # Get table creation SQL from sqlite_master
+                self.cursor.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+                    (obj_name,)
+                )
+            elif obj_type == "views":
+                # Get view creation SQL from sqlite_master
+                self.cursor.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='view' AND name=?",
+                    (obj_name,)
+                )
+            elif obj_type in ["procedures", "functions"]:
+                # SQLite doesn't support stored procedures or functions
+                return False, f"SQLite doesn't support {obj_type}", None
+            else:
+                return False, f"Unsupported object type: {obj_type}", None
+
+            result = self.cursor.fetchone()
+            
+            if result and result[0]:
+                creation_sql = result[0]
+                message = f"Retrieved creation SQL for {obj_type[:-1]}: {obj_name}"
+                return True, message, creation_sql
+            else:
+                return False, f"No creation SQL found for {obj_name}", None
+
+        except sqlite3.Error as e:
+            return False, f"Error getting creation SQL: {str(e)}", None
