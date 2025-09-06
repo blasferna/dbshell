@@ -169,7 +169,8 @@ class AutoComplete(Container):
 
 class QueryEditor(TextArea):
     BINDINGS = [
-        Binding("ctrl+e", "execute_query", "Execute Query"),
+        Binding("ctrl+r", "execute_query", "Execute Query"),
+        Binding("f8", "execute_query", "Execute Query"),
         Binding("ctrl+a", "select_all", "Select All"),
     ]
 
@@ -178,7 +179,7 @@ class QueryEditor(TextArea):
         self.suggestion_provider = None
 
     async def action_execute_query(self) -> None:
-        """Handle Ctrl+E keyboard shortcut."""
+        """Handle f8 keyboard shortcut."""
         await self.app.action_execute_query()
 
     async def action_select_all(self) -> None:
@@ -407,7 +408,8 @@ class DBShellApp(App):
     """
 
     BINDINGS = [
-        ("ctrl+e", "execute_query", "Execute Query"),
+        ("ctrl+r", "execute_query", "Execute Query"),
+        ("f8", "execute_query", "Execute Query"),
         ("ctrl+v", "toggle_view", "Toggle View"),
         ("ctrl+q", "quit", "Quit"),
         ("ctrl+c", "quit", "Quit"),
@@ -685,7 +687,7 @@ class DBShellApp(App):
             self.selected_record_index = event.cursor_row
 
     async def action_execute_query(self) -> None:
-        """Handle Ctrl+E keyboard shortcut."""
+        """Handle f8 keyboard shortcut."""
         await self.execute_query()
 
     async def action_toggle_view(self) -> None:
