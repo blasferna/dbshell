@@ -910,25 +910,38 @@ def parse_arguments() -> argparse.Namespace:
         add_help=False,
         epilog="""
 Examples:
-  %(prog)s --host localhost --user root --password mypass --database testdb
-  %(prog)s --host localhost --user root --password mypass  # Database can be selected interactively
-  %(prog)s --host 192.168.1.100 --user admin --password secret --database production --port 3307
-  %(prog)s -h localhost -u user -p pass -d mydb -P 3306
-  %(prog)s -h localhost -u user -p pass  # No database specified
+  SQLite:
+    %(prog)s /path/to/database.db
+    %(prog)s :memory:  # In-memory database
+    
+  MySQL/MariaDB:
+    %(prog)s --host localhost --user root --password mypass --database testdb
+    %(prog)s --host localhost --user root --password mypass
+    %(prog)s --host 192.168.1.100 --user admin --password secret \\
+             --database production --port 3307
+    %(prog)s -h localhost -u user -p pass -d mydb -P 3306
         """,
     )
 
     # Add manual help argument
     parser.add_argument("--help", action="help", help="Show this help message and exit")
 
-    parser.add_argument("--host", "-h", required=True, help="Database host (required)")
+    # Positional argument for SQLite database file
+    parser.add_argument(
+        "database_file", 
+        nargs="?",
+        help="SQLite database file path (use ':memory:' for in-memory database)"
+    )
+
+    # MySQL/MariaDB options
+    parser.add_argument("--host", "-h", help="Database host")
 
     parser.add_argument(
-        "--user", "-u", required=True, help="Database username (required)"
+        "--user", "-u", help="Database username"
     )
 
     parser.add_argument(
-        "--password", "-p", required=True, help="Database password (required)"
+        "--password", "-p", help="Database password"
     )
 
     parser.add_argument(
@@ -942,7 +955,22 @@ Examples:
         "--port", "-P", type=int, default=3306, help="Database port (default: 3306)"
     )
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    
+    if args.database_file:
+        if any([args.host, args.user, args.password]):
+            parser.error(
+                "SQLite mode cannot be used with MySQL arguments "
+                "(--host, --user, --password)"
+            )
+    else:
+        if not all([args.host, args.user, args.password]):
+            parser.error(
+                "MySQL mode requires --host, --user, and --password arguments "
+                "(or provide a database file for SQLite)"
+            )
+    
+    return args
 
 
 def main():
@@ -950,18 +978,27 @@ def main():
     try:
         args = parse_arguments()
 
-        # Create database connection
         database_factory = DatabaseFactory()
-        adapter = database_factory.create_adapter(
-            "mysql",
-            {
-                "host": args.host,
-                "user": args.user,
-                "password": args.password,
-                "database": args.database,
-                "port": args.port,
-            },
-        )
+        
+        if args.database_file:
+            adapter = database_factory.create_adapter(
+                "sqlite",
+                {
+                    "database": args.database_file,
+                },
+            )
+        else:
+            adapter = database_factory.create_adapter(
+                "mysql",
+                {
+                    "host": args.host,
+                    "user": args.user,
+                    "password": args.password,
+                    "database": args.database,
+                    "port": args.port,
+                },
+            )
+        
         # Create and run the application
         app = DBShellApp(adapter)
         app.run()

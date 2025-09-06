@@ -2,6 +2,7 @@ from typing import Any
 
 from .base import DatabaseAdapter
 from .mysql_adapter import MySQLAdapter
+from .sqlite_adapter import SQLiteAdapter
 
 
 class DatabaseFactory:
@@ -10,6 +11,7 @@ class DatabaseFactory:
     _adapters = {
         "mysql": MySQLAdapter,
         "mariadb": MySQLAdapter,
+        "sqlite": SQLiteAdapter,
     }
 
     @classmethod
