@@ -191,7 +191,28 @@ class Explorer(Container):
         search_input = self.query_one("#search_input", Input)
         objects_list = self.query_one("#objects_list", OptionList)
         
-        if search_input.has_focus and event.key in ("down", "up"):
+        # Handle Ctrl+J (down) and Ctrl+K (up) navigation
+        if event.key == "ctrl+j" or event.key == "ctrl+k":
+            # Ensure objects list is focused for navigation
+            if not objects_list.has_focus and self.filtered_objects:
+                objects_list.focus()
+                if event.key == "ctrl+j" and len(objects_list.options) > 0:
+                    objects_list.highlighted = 0
+                elif event.key == "ctrl+k" and len(objects_list.options) > 0:
+                    objects_list.highlighted = len(objects_list.options) - 1
+            elif objects_list.has_focus and self.filtered_objects:
+                # Navigate within the list
+                current_index = objects_list.highlighted or 0
+                if event.key == "ctrl+j":
+                    # Move down (Ctrl+J)
+                    new_index = min(current_index + 1, len(objects_list.options) - 1)
+                    objects_list.highlighted = new_index
+                elif event.key == "ctrl+k":
+                    # Move up (Ctrl+K)
+                    new_index = max(current_index - 1, 0)
+                    objects_list.highlighted = new_index
+            event.prevent_default()
+        elif search_input.has_focus and event.key in ("down", "up"):
             # Move focus to objects list for navigation
             if self.filtered_objects:
                 objects_list.focus()
