@@ -1,9 +1,7 @@
 import re
 
-from textual._tree_sitter import get_language
 from tree_sitter import Parser
 
-SQL_PARSER = Parser(get_language("sql"))
 SQL_KEYWORDS = [
     "SELECT",
     "FROM",
@@ -58,14 +56,13 @@ SQL_KEYWORDS = [
 class SuggestionProvider:
     def __init__(self, db_connection):
         self.db_connection = db_connection
-        self.parser = SQL_PARSER
 
-    def get_suggestions(self, text: str, cursor_position: tuple) -> list[str]:
+    def get_suggestions(self, text: str, cursor_position: tuple, parser: Parser) -> list[str]:
         # Check if we should hide autocomplete
         if self._should_hide_autocomplete(text, cursor_position):
             return []
 
-        tree = self.parser.parse(bytes(text, "utf8"))
+        tree = parser.parse(bytes(text, "utf8"))
         point = (cursor_position[0], cursor_position[1])
 
         leaf = tree.root_node.descendant_for_point_range(point, point)

@@ -19,8 +19,9 @@ from textual.widgets import (
     TextArea,
 )
 from textual.widgets.option_list import Option
+from tree_sitter import Parser
 
-from dbshell.suggestion_provider import SQL_PARSER, SuggestionProvider
+from dbshell.suggestion_provider import SuggestionProvider
 
 
 @dataclass
@@ -185,6 +186,10 @@ class QueryEditor(TextArea):
         """Handle Ctrl+A to select all text in the editor."""
         self.select_all()
 
+    @property
+    def parser(self) -> Parser:
+        return self.document._parser
+
     def action_accept_suggestion(self) -> None:
         autocomplete = self.app.query_one(AutoComplete)
         if autocomplete.display:
@@ -203,7 +208,7 @@ class QueryEditor(TextArea):
             current_line = text_lines[cursor_line]
 
             # Parse to find what we're replacing using tree-sitter
-            tree = SQL_PARSER.parse(bytes(self.text, "utf8"))
+            tree = self.parser.parse(bytes(self.text, "utf8"))
             point = (cursor_line, cursor_col)
             leaf = tree.root_node.descendant_for_point_range(point, point)
 
@@ -721,7 +726,9 @@ class DBShellApp(App):
         current_word = self._get_current_word(text, cursor_pos)
 
         # Get suggestions from the provider
-        suggestions = self.suggestion_provider.get_suggestions(text, cursor_pos)
+        suggestions = self.suggestion_provider.get_suggestions(
+            text, cursor_pos, event.text_area.parser
+        )
 
         # Filter suggestions based on current word if there is one
         if current_word and suggestions:
