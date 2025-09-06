@@ -3,8 +3,6 @@ import sys
 from dataclasses import dataclass
 from typing import cast
 
-import mysql.connector
-from mysql.connector import Error as MySQLError
 from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -21,6 +19,7 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 from tree_sitter import Parser
 
+from dbshell.database import DatabaseAdapter, DatabaseFactory
 from dbshell.suggestion_provider import SuggestionProvider
 
 
@@ -313,168 +312,6 @@ class ResultViewer(Container):
         yield DataTable(id="results_table", zebra_stripes=True, cursor_type="row")
 
 
-class DatabaseConnection:
-    """Manages database connection and query execution."""
-
-    def __init__(
-        self,
-        host: str,
-        user: str,
-        password: str,
-        database: str | None = None,
-        port: int = 3306,
-    ):
-        self.host = host
-        self.user = user
-        self.password = password
-        self.database = database
-        self.port = port
-        self.connection: mysql.connector.MySQLConnection | None = None
-        self.cursor: mysql.connector.cursor.MySQLCursor | None = None
-
-    def connect(self, database: str | None = None) -> tuple[bool, str]:
-        """
-        Establish database connection.
-        Args:
-            database: Optional database name to connect to
-        Returns: (success: bool, message: str)
-        """
-        # Use provided database or fall back to instance database
-        db_name = database or self.database
-
-        try:
-            # Connect without database first to check connection
-            self.connection = mysql.connector.connect(
-                host=self.host,
-                user=self.user,
-                password=self.password,
-                port=self.port,
-                autocommit=True,
-            )
-
-            # If database is specified, select it
-            if db_name:
-                self.cursor = self.connection.cursor()
-                self.cursor.execute(f"USE `{db_name}`")
-                self.database = db_name
-                return True, f"Connected to {db_name} on {self.host}:{self.port}"
-            else:
-                self.cursor = self.connection.cursor()
-                return (
-                    True,
-                    f"Connected to {self.host}:{self.port} (no database selected)",
-                )
-        except MySQLError as e:
-            return False, f"Connection failed: {str(e)}"
-
-    def get_databases(self) -> tuple[bool, str, list[str] | None]:
-        """
-        Get list of available databases.
-        Returns: (success: bool, message: str, databases: Optional[List[str]])
-        """
-        if not self.connection or not self.cursor:
-            return False, "No database connection", None
-
-        try:
-            self.cursor.execute("SHOW DATABASES")
-            databases = [row[0] for row in self.cursor.fetchall()]
-            # Filter out system databases
-            user_databases = [
-                db
-                for db in databases
-                if db
-                not in ["information_schema", "performance_schema", "mysql", "sys"]
-            ]
-            return True, f"Found {len(user_databases)} databases", user_databases
-        except MySQLError as e:
-            return False, f"Error getting databases: {str(e)}", None
-
-    def change_database(self, database: str) -> tuple[bool, str]:
-        """
-        Change to a different database.
-        Returns: (success: bool, message: str)
-        """
-        if not self.connection or not self.cursor:
-            return False, "No database connection"
-
-        try:
-            self.cursor.execute(f"USE `{database}`")
-            self.database = database
-            return True, f"Changed to database: {database}"
-        except MySQLError as e:
-            return False, f"Error changing database: {str(e)}"
-
-    def get_tables(self) -> tuple[list[str], str | None]:
-        if not self.database or not self.cursor:
-            return [], "No database selected"
-        try:
-            self.cursor.execute("SHOW TABLES")
-            return [row[0] for row in self.cursor.fetchall()], None
-        except MySQLError as e:
-            return [], str(e)
-        
-    def get_columns(self, table_name: str) -> list[str]:
-        """Get columns for a specific table."""
-        if not self.connection or not self.cursor:
-            return []
-
-        try:
-            #self.db_connection.cursor.execute(f"DESCRIBE `{table_name}`")
-            #columns = [row[0] for row in self.db_connection.cursor.fetchall()]
-            _, _, _, rows = self.execute_query(f"DESCRIBE `{table_name}`")
-            columns = [row[0] for row in rows]
-            return columns
-        except Exception:
-            return []
-
-    def execute_query(self, query: str) -> tuple[bool, str, list | None, list | None]:
-        """
-        Execute SQL query.
-        Returns: (success: bool, message: str, columns: Optional[List], rows: Optional[List])
-        """
-        if not self.connection or not self.cursor:
-            return False, "No database connection", None, None
-
-        try:
-            # Strip whitespace and check if query is empty
-            query = query.strip()
-            if not query:
-                return False, "Empty query", None, None
-
-            self.cursor.execute(query)
-
-            # Check if this is a SELECT query (has results)
-            if self.cursor.description:
-                columns = [desc[0] for desc in self.cursor.description]
-                rows = self.cursor.fetchall()
-                row_count = len(rows)
-                return (
-                    True,
-                    f"Query successful. {row_count} rows returned.",
-                    columns,
-                    rows,
-                )
-            else:
-                # For INSERT, UPDATE, DELETE, etc.
-                row_count = self.cursor.rowcount
-                return (
-                    True,
-                    f"Query executed successfully. {row_count} rows affected.",
-                    None,
-                    None,
-                )
-
-        except MySQLError as e:
-            return False, f"Query error: {str(e)}", None, None
-
-    def close(self):
-        """Close database connection."""
-        if self.cursor:
-            self.cursor.close()
-        if self.connection:
-            self.connection.close()
-
-
 class DBShellApp(App):
     """Main TUI application for database shell with modern layout."""
 
@@ -576,9 +413,9 @@ class DBShellApp(App):
         ("ctrl+c", "quit", "Quit"),
     ]
 
-    def __init__(self, db_connection: DatabaseConnection, **kwargs):
+    def __init__(self, adapter: DatabaseAdapter, **kwargs):
         super().__init__(**kwargs)
-        self.db_connection = db_connection
+        self.adapter = adapter
         self.connected = False
         self.is_vertical_view = False
         self.current_columns = []
@@ -586,7 +423,7 @@ class DBShellApp(App):
         self.current_record_index = 0
         self.selected_record_index = None
         self.title = "Dbshell"
-        self.suggestion_provider = SuggestionProvider(self.db_connection)
+        self.suggestion_provider = SuggestionProvider(self.adapter)
 
     def compose(self) -> ComposeResult:
         """Create the main modern application layout."""
@@ -633,11 +470,11 @@ class DBShellApp(App):
         editor.suggestion_provider = self.suggestion_provider
 
         # Try to connect to database (without selecting a specific database first)
-        success, message = self.db_connection.connect()
+        success, message = self.adapter.connect()
         if success:
             self.connected = True
             # If a database was specified in args, notify user
-            if self.db_connection.database:
+            if self.adapter.database:
                 self.notify(message, severity="information")
             # Load available databases
             await self.refresh_databases()
@@ -650,7 +487,7 @@ class DBShellApp(App):
         if not self.connected:
             return
 
-        success, message, databases = self.db_connection.get_databases()
+        success, message, databases = self.adapter.get_databases()
         if success and databases:
             # Update the database selector
             database_select = self.query_one("#database_select", Select)
@@ -664,8 +501,8 @@ class DBShellApp(App):
             database_select.set_options(options)
 
             # If we have a current database, select it
-            if self.db_connection.database:
-                database_select.value = self.db_connection.database
+            if self.adapter.database:
+                database_select.value = self.adapter.database
         elif not success:
             self.notify(message, severity="error")
 
@@ -675,7 +512,7 @@ class DBShellApp(App):
             self.notify("No database connection", severity="error")
             return
 
-        success, message, databases = self.db_connection.get_databases()
+        success, message, databases = self.adapter.get_databases()
         if success and databases:
             # Set a flag to indicate we're in database selection mode
             self._showing_database_selection = True
@@ -699,7 +536,7 @@ class DBShellApp(App):
         if hasattr(self, "_showing_database_selection"):
             self._showing_database_selection = False
 
-        success, message = self.db_connection.change_database(database)
+        success, message = self.adapter.change_database(database)
         if success:
             self.notify(message, severity="information")
             # Update the database selector UI to reflect the change
@@ -794,7 +631,7 @@ class DBShellApp(App):
         database = str(event.value) if event.value else None
 
         if database:
-            success, message = self.db_connection.change_database(database)
+            success, message = self.adapter.change_database(database)
             if success:
                 self.notify(message, severity="information")
                 # Clear current results when changing database
@@ -807,8 +644,8 @@ class DBShellApp(App):
             else:
                 self.notify(message, severity="error")
                 # Reset selector to previous value
-                if self.db_connection.database:
-                    event.control.value = self.db_connection.database
+                if self.adapter.database:
+                    event.control.value = self.adapter.database
                 else:
                     event.control.value = ""
 
@@ -905,7 +742,7 @@ class DBShellApp(App):
             query_upper.startswith(cmd) for cmd in database_independent_queries
         )
 
-        if requires_database and not self.db_connection.database:
+        if requires_database and not self.adapter.database:
             self.notify("Please select a database first", severity="error")
             return
 
@@ -913,7 +750,7 @@ class DBShellApp(App):
             return
 
         # Execute query
-        success, message, columns, rows = self.db_connection.execute_query(query)
+        success, message, columns, rows = self.adapter.execute_query(query)
 
         if success:
             # Update results table if we have data
@@ -1061,7 +898,7 @@ class DBShellApp(App):
 
     async def action_quit(self) -> None:
         """Handle quit action."""
-        self.db_connection.close()
+        self.adapter.close()
         self.exit()
 
 
@@ -1114,16 +951,19 @@ def main():
         args = parse_arguments()
 
         # Create database connection
-        db_connection = DatabaseConnection(
-            host=args.host,
-            user=args.user,
-            password=args.password,
-            database=args.database,  # Can be None now
-            port=args.port,
+        database_factory = DatabaseFactory()
+        adapter = database_factory.create_adapter(
+            "mysql",
+            {
+                "host": args.host,
+                "user": args.user,
+                "password": args.password,
+                "database": args.database,
+                "port": args.port,
+            },
         )
-
         # Create and run the application
-        app = DBShellApp(db_connection)
+        app = DBShellApp(adapter)
         app.run()
 
     except KeyboardInterrupt:
