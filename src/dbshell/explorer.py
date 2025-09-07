@@ -47,6 +47,11 @@ class Explorer(Container):
         layout: vertical;
     }
     
+    /* When in databases mode, make the left panel full width */
+    Explorer.databases-mode .explorer-left {
+        width: 100%;
+    }
+    
     .search-input {
         height: 3;
         margin: 1;
@@ -68,38 +73,57 @@ class Explorer(Container):
     
     """
 
-    def __init__(self, db_adapter: DatabaseAdapter | None = None):
+    def __init__(
+        self, 
+        db_adapter: DatabaseAdapter | None = None, 
+        mode: str = "objects"
+    ):
         super().__init__()
         self.db_adapter = db_adapter
+        self.mode = mode  # "objects" or "databases"
         self.objects_data: dict[str, list[str]] = {}
-        self.all_objects: list[tuple[str, str]] = []  # (name, type)
+        self.all_objects: list[tuple[str, str]] = []
         self.filtered_objects: list[tuple[str, str]] = []
 
     def compose(self) -> ComposeResult:
         """Create explorer layout."""
-        self.border_title = " Database Explorer "
+        title = (" Database Explorer " if self.mode == "objects" 
+                else " Database Selector ")
+        self.border_title = title
+        
+        # Add CSS class for databases mode
+        if self.mode == "databases":
+            self.add_class("databases-mode")
+        
         with Horizontal():
             with Vertical(classes="explorer-left"):
                 yield OptionList(id="objects_list", classes="objects-list")
+                placeholder = ("Search objects..." if self.mode == "objects" 
+                             else "Search databases...")
                 yield Input(
-                    placeholder="Search objects...", 
+                    placeholder=placeholder, 
                     id="search_input",
                     classes="search-input"
                 )
             
-            with Vertical(classes="explorer-right"):
-                yield TextArea(
-                    id="details_area", 
-                    classes="details-area",
-                    read_only=True,
-                    language="sql",
-                    show_line_numbers=False
-                )
+            if self.mode == "objects":
+                # Only show details area in objects mode
+                with Vertical(classes="explorer-right"):
+                    yield TextArea(
+                        id="details_area", 
+                        classes="details-area",
+                        read_only=True,
+                        language="sql",
+                        show_line_numbers=False
+                    )
 
     def on_mount(self) -> None:
         """Initialize the explorer."""
         if self.db_adapter:
-            self.refresh_objects()
+            if self.mode == "objects":
+                self.refresh_objects()
+            else:  # databases mode
+                self.refresh_databases()
         # Set focus to the search input when explorer opens
         search_input = self.query_one("#search_input", Input)
         search_input.focus()
@@ -107,13 +131,34 @@ class Explorer(Container):
     def set_adapter(self, adapter: DatabaseAdapter) -> None:
         """Set the database adapter and refresh objects."""
         self.db_adapter = adapter
-        self.refresh_objects()
+        if self.mode == "objects":
+            self.refresh_objects()
+        else:  # databases mode
+            self.refresh_databases()
+
+    def refresh_databases(self) -> None:
+        """Refresh the list of databases."""
+        if not self.db_adapter:
+            return
+
+        success, message, databases = self.db_adapter.get_databases()
+        if success and databases:
+            # Use all_objects and filtered_objects for databases too
+            self.all_objects = [(db_name, "database") for db_name in databases]
+            self.filtered_objects = self.all_objects.copy()
+            self.update_objects_list()
+        else:
+            self.all_objects = []
+            self.filtered_objects = []
+            
+        # No details area in database mode, so no need to update it
 
     def refresh_objects(self) -> None:
         """Refresh the list of database objects."""
         if not self.db_adapter:
-            details_area = self.query_one("#details_area", TextArea)
-            details_area.text = "No database adapter available"
+            if self.mode == "objects":
+                details_area = self.query_one("#details_area", TextArea)
+                details_area.text = "No database adapter available"
             return
 
         success, message, objects = self.db_adapter.get_database_objects()
@@ -132,11 +177,13 @@ class Explorer(Container):
             self.all_objects = []
             self.filtered_objects = []
             
-        details_area = self.query_one("#details_area", TextArea)
-        if success:
-            details_area.text = f"Database objects loaded successfully.\n{message}"
-        else:
-            details_area.text = f"Failed to load objects: {message}"
+        if self.mode == "objects":
+            details_area = self.query_one("#details_area", TextArea)
+            if success:
+                details_area.text = (f"Database objects loaded successfully.\n"
+                                   f"{message}")
+            else:
+                details_area.text = f"Failed to load objects: {message}"
 
     def update_objects_list(self) -> None:
         """Update the objects list display."""
@@ -144,22 +191,28 @@ class Explorer(Container):
         objects_list.clear_options()
         
         for obj_name, obj_type in self.filtered_objects:
-            # Create a formatted display string with type prefix in dim color
-            type_prefix = {
-                "tables": "t",
-                "views": "v", 
-                "procedures": "p",
-                "functions": "f",
-            }.get(obj_type, "?")
+            if self.mode == "databases":
+                # Simple display for databases
+                display_text = obj_name
+            else:
+                # Create a formatted display string with type prefix in dim color
+                type_prefix = {
+                    "tables": "t",
+                    "views": "v", 
+                    "procedures": "p",
+                    "functions": "f",
+                }.get(obj_type, "?")
+                
+                # Use rich markup to dim the type prefix
+                display_text = f"[dim]{type_prefix}[/dim] {obj_name}"
             
-            # Use rich markup to dim the type prefix
-            display_text = f"[dim]{type_prefix}[/dim] {obj_name}"
             objects_list.add_option(
                 ObjectOption(display_text, obj_name, obj_type)
             )
         
         # Show first item details if available (but don't change focus)
-        if self.filtered_objects:
+        # Only in objects mode
+        if self.filtered_objects and self.mode == "objects":
             first_obj_name, first_obj_type = self.filtered_objects[0]
             self.load_object_details(first_obj_name, first_obj_type)
 
@@ -249,13 +302,16 @@ class Explorer(Container):
         search_input.insert_text_at_cursor(char)
 
     @on(OptionList.OptionSelected, "#objects_list")
-    def show_object_details(self, event: OptionList.OptionSelected) -> None:
-        """Show details of the selected object."""
+    def on_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Handle option selection - either object details or database selection."""
         if not event.option or not event.option.value:
             return
             
         obj_name, obj_type = event.option.value.split("|", 1)
-        self.load_object_details(obj_name, obj_type)
+        
+        if self.mode == "objects":
+            self.load_object_details(obj_name, obj_type)
+        # In databases mode, selection will be handled by the parent modal
 
     @on(OptionList.OptionHighlighted, "#objects_list")
     def show_object_details_on_highlight(
@@ -266,13 +322,13 @@ class Explorer(Container):
             return
             
         obj_name, obj_type = event.option.value.split("|", 1)
-        self.load_object_details(obj_name, obj_type)
+        
+        if self.mode == "objects":
+            self.load_object_details(obj_name, obj_type)
 
     def load_object_details(self, obj_name: str, obj_type: str) -> None:
         """Load and display details for a specific object."""
-        if not self.db_adapter:
-            details_area = self.query_one("#details_area", TextArea)
-            details_area.text = "No database adapter available"
+        if not self.db_adapter or self.mode != "objects":
             return
 
         details_area = self.query_one("#details_area", TextArea)
@@ -306,25 +362,30 @@ class ExplorerModal(ModalScreen):
     }
     """
 
-    def __init__(self, db_adapter: DatabaseAdapter | None = None):
+    def __init__(
+        self, 
+        db_adapter: DatabaseAdapter | None = None, 
+        mode: str = "objects"
+    ):
         super().__init__()
         self.db_adapter = db_adapter
+        self._mode = mode
 
     def compose(self) -> ComposeResult:
         """Create modal layout."""
         with Container(classes="explorer-dialog"):
-            self.explorer = Explorer(self.db_adapter)
+            self.explorer = Explorer(self.db_adapter, self._mode)
             yield self.explorer
 
     def on_mount(self) -> None:
         """Initialize the modal when mounted."""
-        if self.db_adapter and self.db_adapter.database:
+        if self.db_adapter:
             self.explorer.set_adapter(self.db_adapter)
 
     def set_adapter(self, adapter: DatabaseAdapter | None) -> None:
         """Set the database adapter and refresh objects."""
         self.db_adapter = adapter
-        if adapter and adapter.database:
+        if adapter:
             self.explorer.set_adapter(adapter)
 
     def on_key(self, event) -> None:
@@ -332,3 +393,35 @@ class ExplorerModal(ModalScreen):
         if event.key == "escape":
             self.dismiss()
             event.prevent_default()
+        elif event.key == "enter" and self._mode == "databases":
+            # Return selected database on Enter
+            selected_db = self.selected_database
+            if selected_db:
+                self.dismiss(selected_db)
+            event.prevent_default()
+
+    @property
+    def selected_database(self) -> str | None:
+        """Get the currently selected database name (for databases mode)."""
+        if self._mode != "databases":
+            return None
+        
+        objects_list = self.explorer.query_one("#objects_list", OptionList)
+        if objects_list.highlighted is not None and objects_list.options:
+            selected_option = objects_list.options[objects_list.highlighted]
+            if selected_option and selected_option.value:
+                db_name, _ = selected_option.value.split("|", 1)
+                return db_name
+        return None
+
+    @property 
+    def mode(self) -> str:
+        """Get the current mode."""
+        return self._mode
+
+    @on(OptionList.OptionSelected, "#objects_list")
+    def on_database_selected(self, event: OptionList.OptionSelected) -> None:
+        """Handle database selection in databases mode."""
+        if self._mode == "databases" and event.option and event.option.value:
+            db_name, _ = event.option.value.split("|", 1)
+            self.dismiss(db_name)
