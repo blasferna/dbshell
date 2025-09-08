@@ -19,7 +19,7 @@ from textual.widgets.option_list import Option
 from tree_sitter import Parser
 
 from dbshell.database import DatabaseAdapter, DatabaseFactory
-from dbshell.explorer import ExplorerModal
+from dbshell.explorer import ExplorerModal, ExplorerMode
 from dbshell.suggestion_provider import SuggestionProvider
 
 
@@ -632,7 +632,7 @@ class DBShellApp(App):
             return
         
         # Create and show the explorer modal in databases mode
-        explorer_modal = ExplorerModal(self.adapter, mode="databases")
+        explorer_modal = ExplorerModal(self.adapter, mode=ExplorerMode.DATABASES)
         result = await self.push_screen(explorer_modal)
         
         # If a database was selected, change to it
@@ -669,7 +669,7 @@ class DBShellApp(App):
             return
         
         # Create and show the explorer modal
-        explorer_modal = ExplorerModal(self.adapter, mode="objects")
+        explorer_modal = ExplorerModal(self.adapter, mode=ExplorerMode.OBJECTS)
         await self.push_screen(explorer_modal)
 
     async def navigate_record(self, direction: int) -> None:
