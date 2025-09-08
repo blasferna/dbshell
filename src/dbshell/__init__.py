@@ -466,29 +466,24 @@ class DBShellApp(App):
             # If a database was specified in args, notify user
             if self.adapter.database:
                 self.notify(message, severity="information")
-            # Load available databases
-            await self.refresh_databases()
+            await self.refresh_database()
         else:
             self.connected = False
             self.notify(message, severity="error")
 
-    async def refresh_databases(self) -> None:
-        """Refresh the list of available databases."""
+    async def refresh_database(self) -> None:
+        """Update the database selector button text"""
         if not self.connected:
             return
 
-        success, message, databases = self.adapter.get_databases()
-        if success and databases:
-            # Update the database selector button text
-            database_selector = self.query_one("#database_selector", Button)
-            
-            # If we have a current database, show it
-            if self.adapter.database:
-                database_selector.label = self.adapter.database
-            else:
-                database_selector.label = "Select Database"
-        elif not success:
-            self.notify(message, severity="error")
+        database_selector = self.query_one("#database_selector", Button)
+        
+        # If we have a current database, show it
+        if self.adapter.database:
+            database_selector.label = self.adapter.database
+        else:
+            database_selector.label = "Select Database"
+
 
     @on(TextArea.Changed, "#query_editor")
     async def on_text_area_changed(self, event: TextArea.Changed) -> None:
@@ -742,7 +737,7 @@ class DBShellApp(App):
                 if any(
                     cmd in query_upper for cmd in ["CREATE DATABASE", "DROP DATABASE"]
                 ):
-                    await self.refresh_databases()
+                    await self.refresh_database()
             results_viewer = self.query_one("ResultViewer")
             results_viewer.border_title = f"Results ({len(rows) if rows else 0} rows)"
 
