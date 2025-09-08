@@ -357,7 +357,7 @@ class Explorer(Container):
         details_area.text = details_text
 
 
-class ExplorerModal(ModalScreen):
+class ExplorerModal(ModalScreen[str | None]):
     """Simple modal wrapper for the database explorer."""
 
     DEFAULT_CSS = """
@@ -400,14 +400,15 @@ class ExplorerModal(ModalScreen):
     def on_key(self, event) -> None:
         """Handle key events."""
         if event.key == "escape":
-            self.dismiss()
             event.prevent_default()
+            self.dismiss()
         elif event.key == "enter" and self._mode == ExplorerMode.DATABASES:
             # Return selected database on Enter
+            event.prevent_default()
+            event.stop()
             selected_db = self.selected_database
             if selected_db:
                 self.dismiss(selected_db)
-            event.prevent_default()
 
     @property
     def selected_database(self) -> str | None:

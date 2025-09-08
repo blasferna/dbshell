@@ -626,13 +626,15 @@ class DBShellApp(App):
             self.notify("No database connection", severity="error")
             return
         
-        # Create and show the explorer modal in databases mode
         explorer_modal = ExplorerModal(self.adapter, mode=ExplorerMode.DATABASES)
-        result = await self.push_screen(explorer_modal)
         
-        # If a database was selected, change to it
-        if result and isinstance(result, str):
-            await self.change_database(result)
+        def modal_callback(result):
+            if result and isinstance(result, str):
+                self.call_later(self.change_database, result)
+                editor = self.query_one(QueryEditor)
+                self.set_focus(editor)
+
+        self.push_screen(explorer_modal, modal_callback)
 
     async def change_database(self, database: str) -> None:
         """Change to the specified database."""
