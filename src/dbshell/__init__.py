@@ -375,6 +375,11 @@ class DBShellApp(App):
         margin-left: 1;
     }
     
+    #database_selector {
+        width: auto;
+        min-width: 30;
+    }
+    
     .results-panel {
         height: 60%;
     }
