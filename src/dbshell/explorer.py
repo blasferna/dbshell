@@ -128,7 +128,7 @@ class Explorer(Container):
     def on_mount(self) -> None:
         """Initialize the explorer."""
         if self.db_adapter:
-            self.refresh()
+            self._refresh()
         # Set focus to the search input when explorer opens
         search_input = self.query_one("#search_input", Input)
         search_input.focus()
@@ -136,9 +136,9 @@ class Explorer(Container):
     def set_adapter(self, adapter: DatabaseAdapter) -> None:
         """Set the database adapter and refresh objects."""
         self.db_adapter = adapter
-        self.refresh()
+        self._refresh()
 
-    def refresh(self) -> None:
+    def _refresh(self) -> None:
         """Refresh the explorer based on current mode."""
         if self.mode == ExplorerMode.OBJECTS:
             self._refresh_objects()
