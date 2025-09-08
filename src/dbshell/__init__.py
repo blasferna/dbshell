@@ -13,14 +13,13 @@ from textual.widgets import (
     DataTable,
     Footer,
     OptionList,
-    Select,
     TextArea,
 )
 from textual.widgets.option_list import Option
 from tree_sitter import Parser
 
 from dbshell.database import DatabaseAdapter, DatabaseFactory
-from dbshell.explorer import ExplorerModal
+from dbshell.explorer import ExplorerModal, ExplorerMode
 from dbshell.suggestion_provider import SuggestionProvider
 
 
@@ -171,6 +170,7 @@ class AutoComplete(Container):
 class QueryEditor(TextArea):
     BINDINGS = [
         Binding("ctrl+e", "show_explorer", "Show Explorer"),
+        Binding("ctrl+d", "select_database", "Select Database"),
         Binding("ctrl+r", "execute_query", "Execute Query"),
         Binding("f8", "execute_query", "Execute Query"),
         Binding("ctrl+a", "select_all", "Select All"),
@@ -187,6 +187,10 @@ class QueryEditor(TextArea):
     async def action_show_explorer(self) -> None:
         """Handle Ctrl+E to show database explorer."""
         await self.app.action_show_explorer()
+        
+    async def action_select_database(self) -> None:
+        """Handle Ctrl+D to select database."""
+        await self.app.action_select_database()
 
     async def action_select_all(self) -> None:
         """Handle Ctrl+A to select all text in the editor."""
@@ -371,22 +375,9 @@ class DBShellApp(App):
         margin-left: 1;
     }
     
-    Select {
-        height: 1;
-        border: none;
-        padding: 0;
-    }
-    
-    Select SelectCurrent {
-        height: 1;
-        border: none;
-        padding: 0 1;
-    }
-  
-    
-    #database_select {
-        width: 30;
-        margin-right: 1;
+    #database_selector {
+        width: auto;
+        min-width: 30;
     }
     
     .results-panel {
@@ -418,6 +409,7 @@ class DBShellApp(App):
         ("f8", "execute_query", "Execute Query"),
         ("ctrl+v", "toggle_view", "Toggle View"),
         ("ctrl+e", "show_explorer", "Database Explorer"),
+        ("ctrl+d", "select_database", "Select Database"),
         ("ctrl+q", "quit", "Quit"),
         ("ctrl+c", "quit", "Quit"),
     ]
@@ -440,11 +432,10 @@ class DBShellApp(App):
             yield EditorPanel()
             with Horizontal(classes="action-panel"):
                 with Container(classes="select-database-container"):
-                    yield Select(
-                        options=[("No database selected", "")],
-                        value="",
-                        id="database_select",
-                        allow_blank=False,
+                    yield Button(
+                        "No database selected",
+                        id="database_selector",
+                        variant="default",
                     )
                 with Horizontal(classes="button-group"):
                     yield Button(
@@ -485,81 +476,24 @@ class DBShellApp(App):
             # If a database was specified in args, notify user
             if self.adapter.database:
                 self.notify(message, severity="information")
-            # Load available databases
-            await self.refresh_databases()
+            await self.refresh_database()
         else:
             self.connected = False
             self.notify(message, severity="error")
 
-    async def refresh_databases(self) -> None:
-        """Refresh the list of available databases."""
+    async def refresh_database(self) -> None:
+        """Update the database selector button text"""
         if not self.connected:
             return
 
-        success, message, databases = self.adapter.get_databases()
-        if success and databases:
-            # Update the database selector
-            database_select = self.query_one("#database_select", Select)
-
-            # Create options list
-            options = [("No database selected", "")]
-            for db in databases:
-                options.append((db, db))
-
-            # Set the options
-            database_select.set_options(options)
-
-            # If we have a current database, select it
-            if self.adapter.database:
-                database_select.value = self.adapter.database
-        elif not success:
-            self.notify(message, severity="error")
-
-    def show_database_selection(self) -> None:
-        """Show database selection command palette."""
-        if not self.connected:
-            self.notify("No database connection", severity="error")
-            return
-
-        success, message, databases = self.adapter.get_databases()
-        if success and databases:
-            # Set a flag to indicate we're in database selection mode
-            self._showing_database_selection = True
-
-            # Import here to avoid circular imports
-            from textual.command import CommandPalette
-
-            # Create a new command palette that will show databases
-            palette = CommandPalette(placeholder="Select a database...")
-            self.push_screen(palette)
+        database_selector = self.query_one("#database_selector", Button)
+        
+        # If we have a current database, show it
+        if self.adapter.database:
+            database_selector.label = self.adapter.database
         else:
-            self.notify(message or "No databases available", severity="error")
+            database_selector.label = "Select Database"
 
-    def change_database_via_command(self, database: str) -> None:
-        """Change database via command palette."""
-        if not self.connected:
-            self.notify("No database connection", severity="error")
-            return
-
-        # Reset the database selection mode flag
-        if hasattr(self, "_showing_database_selection"):
-            self._showing_database_selection = False
-
-        success, message = self.adapter.change_database(database)
-        if success:
-            self.notify(message, severity="information")
-            # Update the database selector UI to reflect the change
-            database_select = self.query_one("#database_select", Select)
-            database_select.value = database
-            # Clear current results when changing database
-            self.current_columns = []
-            self.current_rows = []
-            self.current_record_index = 0
-            self.selected_record_index = None
-            results_table = self.query_one("#results_table", DataTable)
-            results_table.clear(columns=True)
-        else:
-            self.notify(message, severity="error")
 
     @on(TextArea.Changed, "#query_editor")
     async def on_text_area_changed(self, event: TextArea.Changed) -> None:
@@ -631,32 +565,10 @@ class DBShellApp(App):
 
         return current_line[start:col] if start < col else ""
 
-    @on(Select.Changed, "#database_select")
-    async def on_database_changed(self, event: Select.Changed) -> None:
-        """Handle database selection change."""
-        if not self.connected:
-            return
-
-        database = str(event.value) if event.value else None
-
-        if database:
-            success, message = self.adapter.change_database(database)
-            if success:
-                self.notify(message, severity="information")
-                # Clear current results when changing database
-                self.current_columns = []
-                self.current_rows = []
-                self.current_record_index = 0
-                self.selected_record_index = None
-                results_table = self.query_one("#results_table", DataTable)
-                results_table.clear(columns=True)
-            else:
-                self.notify(message, severity="error")
-                # Reset selector to previous value
-                if self.adapter.database:
-                    event.control.value = self.adapter.database
-                else:
-                    event.control.value = ""
+    @on(Button.Pressed, "#database_selector")
+    async def on_database_selector_pressed(self) -> None:
+        """Handle database selector button press."""
+        await self.action_select_database()
 
     def get_current_editor(self) -> TextArea:
         """Get the query editor."""
@@ -718,6 +630,44 @@ class DBShellApp(App):
         if self.current_columns and self.current_rows:
             await self.update_results_table(self.current_columns, self.current_rows)
 
+    async def action_select_database(self) -> None:
+        """Handle Ctrl+D keyboard shortcut to select database."""
+        if not self.connected:
+            self.notify("No database connection", severity="error")
+            return
+        
+        explorer_modal = ExplorerModal(self.adapter, mode=ExplorerMode.DATABASES)
+        
+        def modal_callback(result):
+            if result and isinstance(result, str):
+                self.call_later(self.change_database, result)
+                editor = self.query_one(QueryEditor)
+                self.set_focus(editor)
+
+        self.push_screen(explorer_modal, modal_callback)
+
+    async def change_database(self, database: str) -> None:
+        """Change to the specified database."""
+        if not self.connected:
+            self.notify("No database connection", severity="error")
+            return
+
+        success, message = self.adapter.change_database(database)
+        if success:
+            self.notify(message, severity="information")
+            # Update the database selector button
+            database_selector = self.query_one("#database_selector", Button)
+            database_selector.label = database
+            # Clear current results when changing database
+            self.current_columns = []
+            self.current_rows = []
+            self.current_record_index = 0
+            self.selected_record_index = None
+            results_table = self.query_one("#results_table", DataTable)
+            results_table.clear(columns=True)
+        else:
+            self.notify(message, severity="error")
+
     async def action_show_explorer(self) -> None:
         """Handle Ctrl+E keyboard shortcut to show database explorer."""
         # Check if database is selected
@@ -726,7 +676,7 @@ class DBShellApp(App):
             return
         
         # Create and show the explorer modal
-        explorer_modal = ExplorerModal(self.adapter)
+        explorer_modal = ExplorerModal(self.adapter, mode=ExplorerMode.OBJECTS)
         await self.push_screen(explorer_modal)
 
     async def navigate_record(self, direction: int) -> None:
@@ -799,7 +749,7 @@ class DBShellApp(App):
                 if any(
                     cmd in query_upper for cmd in ["CREATE DATABASE", "DROP DATABASE"]
                 ):
-                    await self.refresh_databases()
+                    await self.refresh_database()
             results_viewer = self.query_one("ResultViewer")
             results_viewer.border_title = f"Results ({len(rows) if rows else 0} rows)"
 

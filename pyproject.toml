@@ -50,6 +50,7 @@ select = [
 [dependency-groups]
 dev = [
     "ruff>=0.12.11",
+    "textual-dev>=1.7.0",
 ]
 
 [project.scripts]
