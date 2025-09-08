@@ -349,8 +349,7 @@ class Explorer(Container):
         )
         
         if success and creation_sql:
-            obj_title = obj_type.rstrip('s').title()
-            details_text = f"-- {obj_title}: {obj_name}\n\n{creation_sql}"
+            details_text = creation_sql
         else:
             details_text = f"Error loading details: {message}"
 

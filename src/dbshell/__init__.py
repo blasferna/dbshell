@@ -170,6 +170,7 @@ class AutoComplete(Container):
 class QueryEditor(TextArea):
     BINDINGS = [
         Binding("ctrl+e", "show_explorer", "Show Explorer"),
+        Binding("ctrl+d", "select_database", "Select Database"),
         Binding("ctrl+r", "execute_query", "Execute Query"),
         Binding("f8", "execute_query", "Execute Query"),
         Binding("ctrl+a", "select_all", "Select All"),
@@ -186,6 +187,10 @@ class QueryEditor(TextArea):
     async def action_show_explorer(self) -> None:
         """Handle Ctrl+E to show database explorer."""
         await self.app.action_show_explorer()
+        
+    async def action_select_database(self) -> None:
+        """Handle Ctrl+D to select database."""
+        await self.app.action_select_database()
 
     async def action_select_all(self) -> None:
         """Handle Ctrl+A to select all text in the editor."""
