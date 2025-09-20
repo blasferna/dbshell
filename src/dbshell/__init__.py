@@ -925,6 +925,12 @@ Examples:
         "--port", "-P", type=int, default=3306, help="Database port (default: 3306)"
     )
 
+    parser.add_argument(
+        "--ssl-disabled",
+        action="store_true",
+        help="Disable SSL for MySQL",
+    )
+
     args = parser.parse_args()
     
     if args.database_file:
@@ -966,6 +972,7 @@ def main():
                     "password": args.password,
                     "database": args.database,
                     "port": args.port,
+                    "ssl_disabled": args.ssl_disabled,
                 },
             )
         

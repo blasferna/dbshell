@@ -18,6 +18,7 @@ class MySQLAdapter(DatabaseAdapter):
         self.database = connection_params.get("database")
         self.current_database = self.database
         self.cursor: mysql.connector.cursor.MySQLCursor | None = None
+        self.ssl_disabled: bool = connection_params.get("ssl_disabled")
 
     @property
     def engine_name(self) -> str:
@@ -34,6 +35,7 @@ class MySQLAdapter(DatabaseAdapter):
                 password=self.password,
                 port=self.port,
                 autocommit=True,
+                ssl_disabled=self.ssl_disabled
             )
 
             self.cursor = self.connection.cursor()
