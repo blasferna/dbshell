@@ -176,6 +176,7 @@ class QueryEditor(TextArea):
         Binding("f8", "execute_query", "Execute Query"),
         Binding("ctrl+a", "select_all", "Select All"),
         Binding("ctrl+c", "copy", "Copy"),
+        Binding("ctrl+v", "paste", "Paste"),
     ]
 
     def __init__(self, *args, **kwargs):
@@ -203,6 +204,21 @@ class QueryEditor(TextArea):
         if self.selection.start != self.selection.end:
             selected_text = self.selected_text
             clipboard.copy(selected_text)
+
+    async def action_paste(self) -> None:
+        """Handle Ctrl+V to paste text from clipboard"""
+        paste_text = clipboard.paste()
+        if not paste_text:
+            return
+
+        start = self.selection.start
+        end = self.selection.end
+
+        if start != end:
+            self.replace(paste_text, start, end)
+        else:
+            cursor_loc = self.cursor_location
+            self.replace(paste_text, cursor_loc, cursor_loc)
 
     @property
     def parser(self) -> Parser:
