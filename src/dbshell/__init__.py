@@ -3,6 +3,7 @@ import sys
 from dataclasses import dataclass
 from typing import cast
 
+import clipboard
 from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -174,6 +175,7 @@ class QueryEditor(TextArea):
         Binding("ctrl+r", "execute_query", "Execute Query"),
         Binding("f8", "execute_query", "Execute Query"),
         Binding("ctrl+a", "select_all", "Select All"),
+        Binding("ctrl+c", "copy", "Copy"),
     ]
 
     def __init__(self, *args, **kwargs):
@@ -195,6 +197,12 @@ class QueryEditor(TextArea):
     async def action_select_all(self) -> None:
         """Handle Ctrl+A to select all text in the editor."""
         self.select_all()
+
+    async def action_copy(self) -> None:
+        """Handle Ctrl+C to copy selected text"""
+        if self.selection.start != self.selection.end:
+            selected_text = self.selected_text
+            clipboard.copy(selected_text)
 
     @property
     def parser(self) -> Parser:

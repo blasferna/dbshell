@@ -29,6 +29,7 @@ dependencies = [
     "mysql-connector-python>=8.0.33",
     "tree-sitter>=0.25.1",
     "tree-sitter-sql>=0.3.8",
+    "clipboard>=0.0.4",
 ]
 
 [tool.ruff.lint]
