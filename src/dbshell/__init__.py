@@ -935,7 +935,10 @@ Examples:
     )
 
     parser.add_argument(
-        "--password", "-p", help="Database password"
+        "--password", "-p",
+        nargs="?",
+        const=None,
+        help="Database password (if omitted, will prompt if -p is used)"
     )
 
     parser.add_argument(
@@ -956,7 +959,12 @@ Examples:
     )
 
     args = parser.parse_args()
-    
+
+    # Prompt for password if -p/--password is used without a value
+    if (hasattr(args, "password") and args.password is None):
+        import getpass
+        args.password = getpass.getpass("Enter database password: ")
+
     if args.database_file:
         if any([args.host, args.user, args.password]):
             parser.error(
@@ -969,7 +977,7 @@ Examples:
                 "MySQL mode requires --host, --user, and --password arguments "
                 "(or provide a database file for SQLite)"
             )
-    
+
     return args
 
 
