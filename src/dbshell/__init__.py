@@ -1,171 +1,22 @@
 import argparse
 import sys
-from dataclasses import dataclass
-from typing import cast
 
 import clipboard
 from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
-from textual.content import Content
 from textual.widgets import (
     Button,
     DataTable,
     Footer,
-    OptionList,
     TextArea,
 )
-from textual.widgets.option_list import Option
 from tree_sitter import Parser
 
 from dbshell.database import DatabaseAdapter, DatabaseFactory
 from dbshell.explorer import ExplorerModal, ExplorerMode
-from dbshell.suggestion_provider import SuggestionProvider
-
-
-@dataclass
-class TargetState:
-    text: str
-    """The content in the target widget."""
-
-    cursor_position: tuple[int, int]
-    """The cursor position in the target widget (line, column)."""
-
-
-class DropdownItem(Option):
-    def __init__(
-        self,
-        main: str | Content,
-        prefix: str | Content | None = None,
-        id: str | None = None,
-        disabled: bool = False,
-    ) -> None:
-        self.main = Content(main) if isinstance(main, str) else main
-        self.prefix = Content(prefix) if isinstance(prefix, str) else prefix
-        left = self.prefix
-        prompt = self.main
-        if left:
-            prompt = Content.assemble(left, self.main)
-
-        super().__init__(prompt, id, disabled)
-
-    @property
-    def value(self) -> str:
-        return self.main.plain
-
-
-class AutoComplete(Container):
-    DEFAULT_CSS = """
-    AutoComplete {
-        layer: tooltips;
-        display: none;
-        width: 30;
-        height: auto;
-        max-height: 10;
-        background: $surface;
-        border: solid $accent;
-    }
-    AutoComplete OptionList {
-        border: none;
-        background: $surface;
-        height: auto;
-        scrollbar-size-vertical: 1;
-    }
-    """
-
-    def __init__(self):
-        super().__init__()
-        self._option_list = OptionList()
-        self._target_state = TargetState("", (0, 0))
-
-    def compose(self) -> ComposeResult:
-        self._option_list.can_focus = False
-        yield self._option_list
-
-    def show_suggestions(self, suggestions: list[str], position: tuple = None):
-        if not suggestions:
-            self.display = False
-            return
-
-        # Reset offset first to avoid accumulation
-        self.styles.offset = (0, 0)
-
-        # Set position if provided
-        if position:
-            self.styles.offset = position
-
-        # Convert suggestions to DropdownItem objects
-        dropdown_items = [DropdownItem(main=suggestion) for suggestion in suggestions]
-
-        self._option_list.clear_options()
-        self._option_list.add_options(dropdown_items)
-
-        self.display = True
-        if self._option_list.option_count > 0:
-            self._option_list.highlighted = 0
-
-    def hide(self):
-        self.display = False
-        # Reset offset when hiding
-        self.styles.offset = (0, 0)
-
-    def move_cursor(self, down: bool = True):
-        """Move cursor up or down in the suggestion list."""
-        if not self.display or self._option_list.option_count == 0:
-            return
-
-        current_index = self._option_list.highlighted or 0
-
-        if down:
-            new_index = min(current_index + 1, self._option_list.option_count - 1)
-        else:
-            new_index = max(current_index - 1, 0)
-
-        self._option_list.highlighted = new_index
-
-    def get_selected_suggestion(self) -> str:
-        """Get the currently selected suggestion."""
-        if not self.display or self._option_list.option_count == 0:
-            return ""
-
-        current_index = self._option_list.highlighted
-        if current_index is None or current_index >= self._option_list.option_count:
-            return ""
-
-        try:
-            option = cast(
-                DropdownItem, self._option_list.get_option_at_index(current_index)
-            )
-            return option.value
-        except:
-            return ""
-
-    def update_target_state(self, text: str, cursor_position: tuple[int, int]):
-        """Update the cached target state."""
-        self._target_state = TargetState(text, cursor_position)
-
-    def get_current_word_bounds(self) -> tuple[tuple[int, int], tuple[int, int]]:
-        """Get the start and end positions of the current word being typed."""
-        cursor_line, cursor_col = self._target_state.cursor_position
-        text_lines = self._target_state.text.split("\n")
-
-        if cursor_line >= len(text_lines):
-            return (cursor_line, cursor_col), (cursor_line, cursor_col)
-
-        current_line = text_lines[cursor_line]
-
-        # Find start of current word
-        start_col = cursor_col
-        while start_col > 0 and current_line[start_col - 1].isalnum():
-            start_col -= 1
-
-        # Find end of current word
-        end_col = cursor_col
-        while end_col < len(current_line) and current_line[end_col].isalnum():
-            end_col += 1
-
-        return (cursor_line, start_col), (cursor_line, end_col)
+from dbshell.suggestions import SuggestionProvider, AutoCompleteWidget
 
 
 class QueryEditor(TextArea):
@@ -225,8 +76,8 @@ class QueryEditor(TextArea):
         return self.document._parser
 
     def action_accept_suggestion(self) -> None:
-        autocomplete = self.app.query_one(AutoComplete)
-        if autocomplete.display:
+        autocomplete = self.app.query_one(AutoCompleteWidget)
+        if autocomplete.is_visible:
             suggestion = autocomplete.get_selected_suggestion()
             if suggestion:
                 self._apply_suggestion(suggestion)
@@ -283,9 +134,9 @@ class QueryEditor(TextArea):
 
     @on(events.Key)
     def on_key(self, event: events.Key) -> None:
-        autocomplete = self.app.query_one(AutoComplete)
+        autocomplete = self.app.query_one(AutoCompleteWidget)
 
-        if autocomplete.display:
+        if autocomplete.is_visible:
             if event.key == "escape":
                 autocomplete.hide()
                 event.prevent_default()
@@ -319,7 +170,7 @@ class EditorPanel(Container):
             show_line_numbers=True,
             language="sql",
         )
-        yield AutoComplete()
+        yield AutoCompleteWidget(id="autocomplete")
 
 
 class ResultViewer(Container):
@@ -521,25 +372,18 @@ class DBShellApp(App):
 
     @on(TextArea.Changed, "#query_editor")
     async def on_text_area_changed(self, event: TextArea.Changed) -> None:
-        autocomplete = self.query_one(AutoComplete)
+        autocomplete = self.query_one(AutoCompleteWidget)
 
         text = event.text_area.text
         cursor_pos = event.text_area.cursor_location
 
-        # Get the current word being typed
-        current_word = self._get_current_word(text, cursor_pos)
+        # Update autocomplete's target state for word bounds detection
+        autocomplete.update_target_state(text, cursor_pos)
 
-        # Get suggestions from the provider
+        # Get suggestions from the provider (filtering is now done internally)
         suggestions = self.suggestion_provider.get_suggestions(
             text, cursor_pos, event.text_area.parser
         )
-
-        # Filter suggestions based on current word if there is one
-        if current_word and suggestions:
-            filtered_suggestions = [
-                s for s in suggestions if s.lower().startswith(current_word.lower())
-            ]
-            suggestions = filtered_suggestions if filtered_suggestions else suggestions
 
         if suggestions:
             # Calculate the position relative to the TextArea
@@ -562,32 +406,6 @@ class DBShellApp(App):
             autocomplete.show_suggestions(suggestions, (absolute_col, absolute_row))
         else:
             autocomplete.hide()
-
-    def _get_current_word(self, text: str, cursor_pos: tuple) -> str:
-        """Get the current word being typed at cursor position."""
-        row, col = cursor_pos
-        lines = text.split("\n")
-
-        if row >= len(lines):
-            return ""
-
-        current_line = lines[row]
-
-        # Find the start of the current word
-        start = col
-        while start > 0 and (
-            current_line[start - 1].isalnum() or current_line[start - 1] == "_"
-        ):
-            start -= 1
-
-        # Find the end of the current word
-        end = col
-        while end < len(current_line) and (
-            current_line[end].isalnum() or current_line[end] == "_"
-        ):
-            end += 1
-
-        return current_line[start:col] if start < col else ""
 
     @on(Button.Pressed, "#database_selector")
     async def on_database_selector_pressed(self) -> None:
