@@ -12,6 +12,8 @@ A simple Text User Interface (TUI) application for executing SQL queries against
 * Execute SQL queries
 * View query results in a tabular format (you can switch between horizontal and vertical views)
 * Edit the currently selected record (Ctrl+U): opens an in-place form pre-filled with the row's values, runs an `UPDATE` against the table, and refreshes the results automatically. The source table is auto-detected from simple `SELECT ... FROM <table>` queries and primary-key columns are used to build the `WHERE` clause.
+* Copy the active row as JSON to the clipboard (Ctrl+J). Works in both horizontal and vertical view; the output is a pretty-printed object keyed by column name.
+* Export the current result set (Ctrl+Shift+E, or the **Export** button): opens a modal where you pick a format — **JSON**, **CSV**, **TSV**, **Markdown**, or **INSERT SQL** (the last one is available only when the source table is known) — and a destination (clipboard or file path). The file path is pre-filled with a timestamped default under your home directory.
 * Suggestions for SQL keywords and table/column names.
 * Database explorer (Ctrl+E): browse tables, views, procedures and functions. Press **Enter** on any object to open a context menu with actions:
   * **View Data** — inserts a `SELECT * FROM <object>;` into the editor (press F8 to run).

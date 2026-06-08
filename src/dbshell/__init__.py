@@ -1,5 +1,7 @@
 import argparse
+import json
 import sys
+from pathlib import Path
 
 import clipboard
 from textual import events, on
@@ -17,8 +19,16 @@ from tree_sitter import Parser
 from dbshell.database import DatabaseAdapter, DatabaseFactory
 from dbshell.edit_modal import RecordEditModal
 from dbshell.explorer import ExplorerModal, ExplorerMode, ObjectAction
+from dbshell.export_modal import ExportModal
+from dbshell.exporters import (
+    to_csv,
+    to_insert_sql,
+    to_json,
+    to_markdown,
+    to_tsv,
+)
 from dbshell.sql_utils import extract_source_table
-from dbshell.suggestions import SuggestionProvider, AutoCompleteWidget
+from dbshell.suggestions import AutoCompleteWidget, SuggestionProvider
 
 
 class QueryEditor(TextArea):
@@ -288,9 +298,13 @@ class DBShellApp(App):
         ("ctrl+e", "show_explorer", "Database Explorer"),
         ("ctrl+d", "select_database", "Select Database"),
         ("ctrl+u", "edit_record", "Edit Record"),
+        ("ctrl+j", "copy_row_json", "Copy Row as JSON"),
+        ("ctrl+shift+e", "export_data", "Export Data"),
         ("ctrl+q", "quit", "Quit"),
         ("ctrl+c", "quit", "Quit"),
     ]
+
+    EXPORT_FORMATS = ("JSON", "CSV", "TSV", "Markdown", "INSERT SQL")
 
     def __init__(self, adapter: DatabaseAdapter, **kwargs):
         super().__init__(**kwargs)
@@ -340,6 +354,12 @@ class DBShellApp(App):
                         "Vertical View",
                         id="toggle_view_btn",
                         variant="default",
+                    )
+                    yield Button(
+                        "Export",
+                        id="export_btn",
+                        variant="default",
+                        disabled=True,
                     )
                     yield Button(
                         "Run",
@@ -456,6 +476,11 @@ class DBShellApp(App):
         """Handle edit record button press."""
         await self.action_edit_record()
 
+    @on(Button.Pressed, "#export_btn")
+    async def export_button(self) -> None:
+        """Handle export button press."""
+        await self.action_export_data()
+
     @on(DataTable.RowSelected)
     async def on_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle row selection in horizontal view."""
@@ -526,6 +551,7 @@ class DBShellApp(App):
             results_table = self.query_one("#results_table", DataTable)
             results_table.clear(columns=True)
             await self._update_edit_button_state()
+            await self._update_export_button_state()
         else:
             self.notify(message, severity="error")
 
@@ -670,6 +696,14 @@ class DBShellApp(App):
             return
         edit_btn.disabled = self.source_table is None or not self.current_rows
 
+    async def _update_export_button_state(self) -> None:
+        """Enable the Export button only when there are results."""
+        try:
+            export_btn = self.query_one("#export_btn", Button)
+        except Exception:
+            return
+        export_btn.disabled = not self.current_rows
+
     async def action_edit_record(self) -> None:
         """Open the edit modal for the currently selected/active record."""
         if not self.connected:
@@ -746,6 +780,105 @@ class DBShellApp(App):
 
         results_viewer = self.query_one("ResultViewer")
         results_viewer.border_title = f"Results ({len(rows) if rows else 0} rows)"
+
+    async def action_copy_row_json(self) -> None:
+        """Copy the currently active row as a JSON object to the clipboard."""
+        if not self.current_rows or not self.current_columns:
+            self.notify("Run a query first", severity="warning")
+            return
+
+        index = self._get_active_record_index()
+        if index is None:
+            self.notify("No row selected", severity="warning")
+            return
+
+        row = self.current_rows[index]
+        payload = json.dumps(
+            dict(zip(list(self.current_columns), list(row), strict=False)),
+            indent=2,
+            default=str,
+        )
+        try:
+            clipboard.copy(payload)
+        except Exception as exc:
+            self.notify(f"Copy failed: {exc}", severity="error")
+            return
+        self.notify("Row copied as JSON to clipboard")
+
+    async def action_export_data(self) -> None:
+        """Open the export modal and write the current result set."""
+        if not self.current_columns or not self.current_rows:
+            self.notify("Run a query first", severity="warning")
+            return
+
+        formats = list(self.EXPORT_FORMATS)
+        if not self.source_table and "INSERT SQL" in formats:
+            formats.remove("INSERT SQL")
+
+        def _on_close(result: tuple[str, str | None] | None) -> None:
+            if result is None:
+                return
+            fmt, destination = result
+            self.call_later(self._perform_export, fmt, destination)
+
+        self.push_screen(ExportModal(formats=formats), _on_close)
+
+    async def _perform_export(self, fmt: str, destination: str | None) -> None:
+        """Render the result set in the chosen format and send it to its destination."""
+        if not self.current_columns or not self.current_rows:
+            return
+
+        columns = list(self.current_columns)
+        rows = [tuple(r) for r in self.current_rows]
+
+        try:
+            if fmt == "JSON":
+                text = to_json(columns, rows)
+            elif fmt == "CSV":
+                text = to_csv(columns, rows)
+            elif fmt == "TSV":
+                text = to_tsv(columns, rows)
+            elif fmt == "Markdown":
+                text = to_markdown(columns, rows)
+            elif fmt == "INSERT SQL":
+                if not self.source_table:
+                    self.notify(
+                        "INSERT SQL export needs a single source table",
+                        severity="error",
+                    )
+                    return
+                text = to_insert_sql(
+                    columns,
+                    rows,
+                    table=self.source_table,
+                    quoter=self.adapter.quote_identifier,
+                )
+            else:
+                self.notify(f"Unknown format: {fmt}", severity="error")
+                return
+        except Exception as exc:
+            self.notify(f"Export failed: {exc}", severity="error")
+            return
+
+        row_count = len(self.current_rows)
+        if destination is None:
+            try:
+                clipboard.copy(text)
+            except Exception as exc:
+                self.notify(f"Copy failed: {exc}", severity="error")
+                return
+            self.notify(
+                f"Exported {row_count} row(s) as {fmt} to clipboard"
+            )
+        else:
+            try:
+                path = Path(destination).expanduser()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text, encoding="utf-8")
+            except OSError as exc:
+                self.notify(f"Write failed: {exc}", severity="error")
+                return
+            self.notify(f"Exported {row_count} row(s) as {fmt} to {path}")
 
     async def execute_query(self) -> None:
         """Execute the SQL query from the current editor."""
@@ -837,6 +970,7 @@ class DBShellApp(App):
         results_table.clear(columns=True)
 
         if not columns:
+            await self._update_export_button_state()
             return
 
         if self.is_vertical_view:
@@ -849,6 +983,8 @@ class DBShellApp(App):
         # Update navigation buttons state
         if self.is_vertical_view and rows:
             await self.update_navigation_buttons()
+
+        await self._update_export_button_state()
 
     async def update_horizontal_view(
         self, results_table: DataTable, columns: list[str], rows: list[tuple]
