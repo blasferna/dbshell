@@ -1002,11 +1002,6 @@ Examples:
 
     args = parser.parse_args()
 
-    # Prompt for password if -p/--password is used without a value
-    if (hasattr(args, "password") and args.password is None):
-        import getpass
-        args.password = getpass.getpass("Enter database password: ")
-
     if args.database_file:
         if any([args.host, args.user, args.password]):
             parser.error(
@@ -1014,6 +1009,11 @@ Examples:
                 "(--host, --user, --password)"
             )
     else:
+        # Prompt for password if -p/--password is used without a value
+        if hasattr(args, "password") and args.password is None:
+            import getpass
+            args.password = getpass.getpass("Enter database password: ")
+
         if not all([args.host, args.user, args.password]):
             parser.error(
                 "MySQL mode requires --host, --user, and --password arguments "
