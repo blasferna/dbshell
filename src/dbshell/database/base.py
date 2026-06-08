@@ -83,6 +83,17 @@ class DatabaseAdapter(ABC):
         pass
 
     @abstractmethod
+    def get_primary_keys(
+        self, table: str, database: str = None
+    ) -> tuple[bool, str, list[str] | None]:
+        """Get the list of primary key column names for a table.
+
+        Returns an empty list if the table has no primary key (or if it is
+        a view). Order is preserved for composite keys.
+        """
+        pass
+
+    @abstractmethod
     def quote_identifier(self, name: str) -> str:
         """Return the identifier quoted for the current engine."""
         pass

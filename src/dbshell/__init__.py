@@ -15,7 +15,9 @@ from textual.widgets import (
 from tree_sitter import Parser
 
 from dbshell.database import DatabaseAdapter, DatabaseFactory
+from dbshell.edit_modal import RecordEditModal
 from dbshell.explorer import ExplorerModal, ExplorerMode, ObjectAction
+from dbshell.sql_utils import extract_source_table
 from dbshell.suggestions import SuggestionProvider, AutoCompleteWidget
 
 
@@ -285,6 +287,7 @@ class DBShellApp(App):
         ("ctrl+v", "toggle_view", "Toggle View"),
         ("ctrl+e", "show_explorer", "Database Explorer"),
         ("ctrl+d", "select_database", "Select Database"),
+        ("ctrl+u", "edit_record", "Edit Record"),
         ("ctrl+q", "quit", "Quit"),
         ("ctrl+c", "quit", "Quit"),
     ]
@@ -298,6 +301,8 @@ class DBShellApp(App):
         self.current_rows = []
         self.current_record_index = 0
         self.selected_record_index = None
+        self.last_select_query: str | None = None
+        self.source_table: str | None = None
         self.title = "Dbshell"
         self.suggestion_provider = SuggestionProvider(self.adapter)
 
@@ -322,6 +327,12 @@ class DBShellApp(App):
                     yield Button(
                         "Next ▶",
                         id="next_record_btn",
+                        variant="default",
+                        disabled=True,
+                    )
+                    yield Button(
+                        "Edit Record",
+                        id="edit_record_btn",
                         variant="default",
                         disabled=True,
                     )
@@ -440,6 +451,11 @@ class DBShellApp(App):
         """Handle next record button press."""
         await self.navigate_record(1)
 
+    @on(Button.Pressed, "#edit_record_btn")
+    async def edit_record_button(self) -> None:
+        """Handle edit record button press."""
+        await self.action_edit_record()
+
     @on(DataTable.RowSelected)
     async def on_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle row selection in horizontal view."""
@@ -505,8 +521,11 @@ class DBShellApp(App):
             self.current_rows = []
             self.current_record_index = 0
             self.selected_record_index = None
+            self.last_select_query = None
+            self.source_table = None
             results_table = self.query_one("#results_table", DataTable)
             results_table.clear(columns=True)
+            await self._update_edit_button_state()
         else:
             self.notify(message, severity="error")
 
@@ -627,6 +646,107 @@ class DBShellApp(App):
             self.current_record_index = new_index
             await self.update_results_table(self.current_columns, self.current_rows)
 
+    def _get_active_record_index(self) -> int | None:
+        """Return the index of the row that should be edited."""
+        if not self.current_rows:
+            return None
+        if self.is_vertical_view:
+            idx = self.current_record_index
+        else:
+            idx = (
+                self.selected_record_index
+                if self.selected_record_index is not None
+                else 0
+            )
+        if 0 <= idx < len(self.current_rows):
+            return idx
+        return None
+
+    async def _update_edit_button_state(self) -> None:
+        """Enable the Edit Record button only when editing is possible."""
+        try:
+            edit_btn = self.query_one("#edit_record_btn", Button)
+        except Exception:
+            return
+        edit_btn.disabled = self.source_table is None or not self.current_rows
+
+    async def action_edit_record(self) -> None:
+        """Open the edit modal for the currently selected/active record."""
+        if not self.connected:
+            self.notify("No database connection", severity="error")
+            return
+
+        if not self.current_rows or not self.current_columns:
+            self.notify("Run a SELECT first to load a record", severity="warning")
+            return
+
+        if not self.source_table:
+            self.notify(
+                "Cannot determine source table for the current results. "
+                "Use a simple 'SELECT ... FROM <table>' query.",
+                severity="warning",
+            )
+            return
+
+        index = self._get_active_record_index()
+        if index is None:
+            self.notify("No record selected", severity="warning")
+            return
+
+        ok, message, primary_keys = self.adapter.get_primary_keys(self.source_table)
+        if not ok:
+            self.notify(f"Cannot edit: {message}", severity="error")
+            return
+        if not primary_keys:
+            self.notify(
+                f"Table '{self.source_table}' has no primary key; cannot edit safely.",
+                severity="warning",
+            )
+            return
+
+        row = self.current_rows[index]
+        modal = RecordEditModal(
+            self.adapter,
+            self.source_table,
+            list(self.current_columns),
+            list(row),
+            primary_keys,
+        )
+
+        def _on_close(result: bool | None) -> None:
+            if result is True:
+                self.call_later(self._refresh_after_edit, index)
+
+        self.push_screen(modal, _on_close)
+
+    async def _refresh_after_edit(self, previous_index: int) -> None:
+        """Re-run the last SELECT after a successful edit and reposition the view."""
+        if not self.last_select_query:
+            return
+
+        success, message, columns, rows = self.adapter.execute_query(
+            self.last_select_query
+        )
+        if not success:
+            self.notify(f"Refresh failed: {message}", severity="error")
+            return
+
+        if columns and rows is not None:
+            self.current_columns = columns
+            self.current_rows = rows
+            # Try to keep the same row in view; clamp to the new bounds.
+            if rows:
+                self.current_record_index = min(previous_index, len(rows) - 1)
+                self.selected_record_index = self.current_record_index
+            else:
+                self.current_record_index = 0
+                self.selected_record_index = None
+            await self.update_results_table(columns, rows)
+            self.notify("Row updated", severity="information")
+
+        results_viewer = self.query_one("ResultViewer")
+        results_viewer.border_title = f"Results ({len(rows) if rows else 0} rows)"
+
     async def execute_query(self) -> None:
         """Execute the SQL query from the current editor."""
         if not self.connected:
@@ -666,6 +786,10 @@ class DBShellApp(App):
                 self.current_rows = rows
                 self.current_record_index = 0
                 self.selected_record_index = None
+                # Track the last successful SELECT and its source table so
+                # the Edit Record action can build an UPDATE statement.
+                self.last_select_query = query
+                self.source_table = extract_source_table(query)
                 # Reset to horizontal view for new queries
                 self.is_vertical_view = False
                 toggle_btn = self.query_one("#toggle_view_btn", Button)
@@ -677,6 +801,8 @@ class DBShellApp(App):
                 self.current_rows = []
                 self.current_record_index = 0
                 self.selected_record_index = None
+                self.last_select_query = None
+                self.source_table = None
                 results_table = self.query_one("#results_table", DataTable)
                 results_table.clear(columns=True)
 
@@ -696,8 +822,12 @@ class DBShellApp(App):
             self.current_rows = []
             self.current_record_index = 0
             self.selected_record_index = None
+            self.last_select_query = None
+            self.source_table = None
             results_table = self.query_one("#results_table", DataTable)
             results_table.clear(columns=True)
+
+        await self._update_edit_button_state()
 
     async def update_results_table(self, columns: list[str], rows: list[tuple]) -> None:
         """Update the results table with query results."""

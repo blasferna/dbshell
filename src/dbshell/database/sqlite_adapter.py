@@ -253,6 +253,35 @@ class SQLiteAdapter(DatabaseAdapter):
         except sqlite3.Error as e:
             return False, f"Error describing table: {str(e)}", None
 
+    def get_primary_keys(
+        self, table: str, database: str = None
+    ) -> tuple[bool, str, list[str] | None]:
+        """Get primary key columns for a table.
+
+        Returns an empty list for views or tables without a primary key.
+        """
+        if not self.connection or not self.cursor:
+            return False, "No database connection", None
+
+        try:
+            self.cursor.execute(
+                """
+                SELECT 1 FROM sqlite_master
+                WHERE name = ? AND type = 'view'
+                """,
+                (table,),
+            )
+            if self.cursor.fetchone() is not None:
+                return True, "View has no primary key", []
+
+            self.cursor.execute(f'PRAGMA table_info("{table}")')
+            pk_columns: list[str] = [
+                row[1] for row in self.cursor.fetchall() if row[5] and row[5] > 0
+            ]
+            return True, f"{len(pk_columns)} primary key column(s)", pk_columns
+        except sqlite3.Error as e:
+            return False, f"Error getting primary keys: {str(e)}", None
+
     def quote_identifier(self, name: str) -> str:
         """Return the identifier quoted with double quotes for SQLite."""
         return f'"{name}"'

@@ -270,6 +270,36 @@ class MySQLAdapter(DatabaseAdapter):
         except MySQLError as e:
             return False, f"Error describing table: {str(e)}", None
 
+    def get_primary_keys(
+        self, table: str, database: str = None
+    ) -> tuple[bool, str, list[str] | None]:
+        """Get primary key columns for a table.
+
+        Returns an empty list for views or tables without a primary key.
+        """
+        if not self.connection or not self.cursor:
+            return False, "No database connection", None
+
+        try:
+            self.cursor.execute(
+                """
+                SELECT TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s
+                """,
+                (table,),
+            )
+            row = self.cursor.fetchone()
+            if row is None or str(row[0]).upper() != "BASE TABLE":
+                return True, "View has no primary key", []
+
+            self.cursor.execute(
+                f"SHOW KEYS FROM `{table}` WHERE Key_name = 'PRIMARY'"
+            )
+            pk_columns: list[str] = [item_row[4] for item_row in self.cursor.fetchall()]
+            return True, f"{len(pk_columns)} primary key column(s)", pk_columns
+        except MySQLError as e:
+            return False, f"Error getting primary keys: {str(e)}", None
+
     def quote_identifier(self, name: str) -> str:
         """Return the identifier quoted with MySQL backticks."""
         return f"`{name}`"

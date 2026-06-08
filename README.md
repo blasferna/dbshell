@@ -11,6 +11,7 @@ A simple Text User Interface (TUI) application for executing SQL queries against
 * Connect to MySQL databases and SQLite database files
 * Execute SQL queries
 * View query results in a tabular format (you can switch between horizontal and vertical views)
+* Edit the currently selected record (Ctrl+U): opens an in-place form pre-filled with the row's values, runs an `UPDATE` against the table, and refreshes the results automatically. The source table is auto-detected from simple `SELECT ... FROM <table>` queries and primary-key columns are used to build the `WHERE` clause.
 * Suggestions for SQL keywords and table/column names.
 * Database explorer (Ctrl+E): browse tables, views, procedures and functions. Press **Enter** on any object to open a context menu with actions:
   * **View Data** — inserts a `SELECT * FROM <object>;` into the editor (press F8 to run).

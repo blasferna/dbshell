@@ -242,7 +242,12 @@ class Explorer(Container):
                 details_area.text = f"Failed to load objects: {message}"
 
     def update_objects_list(self) -> None:
-        """Update the objects list display."""
+        """Update the objects list display.
+
+        In objects mode, also re-targets the highlight to the first
+        matching item so the details panel refreshes — but the actual
+        details fetch happens in the OptionHighlighted handler.
+        """
         objects_list = self.query_one("#objects_list", OptionList)
         objects_list.clear_options()
 
@@ -266,10 +271,12 @@ class Explorer(Container):
                 ObjectOption(display_text, obj_name, obj_type)
             )
 
-        # Show static info for the first item if available (objects mode only)
-        if self.filtered_objects and self.mode == ExplorerMode.OBJECTS:
-            first_obj_name, first_obj_type = self.filtered_objects[0]
-            self.show_static_info(first_obj_name, first_obj_type)
+        # Re-target the highlight to the first item so the details
+        # panel updates after a search. The OptionHighlighted handler
+        # will fire (even when the index stays at 0) and trigger the
+        # actual details fetch.
+        if self.filtered_objects:
+            objects_list.highlighted = 0
 
     @on(Input.Changed, "#search_input")
     def filter_objects(self, event: Input.Changed) -> None:
@@ -378,51 +385,27 @@ class Explorer(Container):
             return
 
         obj_name, obj_type = event.option.value.split("|", 1)
-        self.show_static_info(obj_name, obj_type)
+        self.load_object_details(obj_name, obj_type)
 
-    def show_static_info(self, obj_name: str, obj_type: str) -> None:
-        """Show static info (type, columns, row count) for the object."""
+    def load_object_details(self, obj_name: str, obj_type: str) -> None:
+        """Load and display the creation SQL for a specific object.
+
+        One DB call per object: the CREATE statement. Plain text — no
+        per-keystroke fetches, no column/row count chatter.
+        """
         if not self.db_adapter or self.mode != ExplorerMode.OBJECTS:
             return
 
         details_area = self.query_one("#details_area", TextArea)
-        type_label = _OBJECT_TYPE_LABELS.get(obj_type, obj_type)
-        lines: list[str] = [
-            f"[bold]{type_label}[/bold]: {obj_name}",
-            "",
-        ]
+        details_area.text = "Loading..."
 
-        if obj_type in ("tables", "views"):
-            success, message, columns = self.db_adapter.get_object_columns_detailed(
-                obj_name
-            )
-            if success and columns:
-                lines.append(f"[bold]Columns[/bold] ({len(columns)}):")
-                for col_name, col_type in columns:
-                    lines.append(f"  - {col_name}  [dim]{col_type}[/dim]")
-            else:
-                lines.append(f"[dim]Columns unavailable: {message}[/dim]")
-
-            if obj_type == "tables":
-                success, message, count = self.db_adapter.get_row_count(obj_name)
-                if success and count is not None:
-                    lines.append("")
-                    lines.append(f"[bold]Rows[/bold]: {count}")
-                else:
-                    lines.append("")
-                    lines.append(f"[dim]Row count unavailable: {message}[/dim]")
+        success, message, creation_sql = self.db_adapter.get_object_creation_sql(
+            obj_name, obj_type
+        )
+        if success and creation_sql:
+            details_area.text = creation_sql
         else:
-            # Procedures / functions: show creation SQL as static info
-            success, message, creation_sql = (
-                self.db_adapter.get_object_creation_sql(obj_name, obj_type)
-            )
-            if success and creation_sql:
-                lines.append("[bold]Definition[/bold]:")
-                lines.append(creation_sql)
-            else:
-                lines.append(f"[dim]Definition unavailable: {message}[/dim]")
-
-        details_area.text = "\n".join(lines)
+            details_area.text = f"Error loading details: {message}"
 
     def _open_action_menu(self, obj_name: str, obj_type: str) -> None:
         """Push the action menu modal for the given object."""
