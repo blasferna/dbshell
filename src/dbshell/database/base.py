@@ -64,3 +64,25 @@ class DatabaseAdapter(ABC):
     ) -> tuple[bool, str, str | None]:
         """Get the creation SQL for a database object."""
         pass
+
+    @abstractmethod
+    def get_row_count(
+        self, table: str, database: str = None
+    ) -> tuple[bool, str, int | None]:
+        """Get the row count for a table or view."""
+        pass
+
+    @abstractmethod
+    def get_object_columns_detailed(
+        self, table: str, database: str = None
+    ) -> tuple[bool, str, list[tuple[str, str]] | None]:
+        """Get columns with their types for a table or view.
+
+        Returns a list of (column_name, column_type) tuples.
+        """
+        pass
+
+    @abstractmethod
+    def quote_identifier(self, name: str) -> str:
+        """Return the identifier quoted for the current engine."""
+        pass

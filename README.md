@@ -12,6 +12,14 @@ A simple Text User Interface (TUI) application for executing SQL queries against
 * Execute SQL queries
 * View query results in a tabular format (you can switch between horizontal and vertical views)
 * Suggestions for SQL keywords and table/column names.
+* Database explorer (Ctrl+E): browse tables, views, procedures and functions. Press **Enter** on any object to open a context menu with actions:
+  * **View Data** — inserts a `SELECT * FROM <object>;` into the editor (press F8 to run).
+  * **Insert Template** — inserts `INSERT INTO <object> (col1, col2, ...) VALUES (?, ?, ...);`.
+  * **Update Template** — inserts `UPDATE <object> SET col1 = ?, col2 = ? WHERE ...;`.
+  * **Delete Template** — inserts `DELETE FROM <object> WHERE ...;`.
+  * **Copy Name** — copies the object name to the clipboard.
+  * **Copy CREATE SQL** — copies the `CREATE` statement to the clipboard.
+  Available actions vary by object type (tables support all of them; views only support View Data and copies; procedures/functions only support copies).
 
 ## Installation
 

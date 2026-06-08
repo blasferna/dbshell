@@ -238,3 +238,38 @@ class MySQLAdapter(DatabaseAdapter):
 
         except MySQLError as e:
             return False, f"Error getting creation SQL: {str(e)}", None
+
+    def get_row_count(
+        self, table: str, database: str = None
+    ) -> tuple[bool, str, int | None]:
+        """Get the row count for a table or view."""
+        if not self.connection or not self.cursor:
+            return False, "No database connection", None
+
+        try:
+            self.cursor.execute(f"SELECT COUNT(*) FROM `{table}`")
+            row = self.cursor.fetchone()
+            count = int(row[0]) if row else 0
+            return True, f"{count} rows", count
+        except MySQLError as e:
+            return False, f"Error counting rows: {str(e)}", None
+
+    def get_object_columns_detailed(
+        self, table: str, database: str = None
+    ) -> tuple[bool, str, list[tuple[str, str]] | None]:
+        """Get columns with their types for a table or view."""
+        if not self.connection or not self.cursor:
+            return False, "No database connection", None
+
+        try:
+            self.cursor.execute(f"DESCRIBE `{table}`")
+            columns: list[tuple[str, str]] = [
+                (row[0], row[1]) for row in self.cursor.fetchall()
+            ]
+            return True, f"{len(columns)} columns", columns
+        except MySQLError as e:
+            return False, f"Error describing table: {str(e)}", None
+
+    def quote_identifier(self, name: str) -> str:
+        """Return the identifier quoted with MySQL backticks."""
+        return f"`{name}`"

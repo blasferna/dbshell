@@ -1,4 +1,6 @@
 
+import contextlib
+from collections.abc import Callable
 from enum import Enum
 
 from textual import on
@@ -8,6 +10,7 @@ from textual.screen import ModalScreen
 from textual.widgets import (
     Input,
     OptionList,
+    Static,
     TextArea,
 )
 from textual.widgets.option_list import Option
@@ -21,14 +24,58 @@ class ExplorerMode(Enum):
     DATABASES = "databases"
 
 
+class ObjectAction(Enum):
+    """Actions available for a database object."""
+
+    VIEW_DATA = "View Data"
+    INSERT_TEMPLATE = "Insert Template"
+    UPDATE_TEMPLATE = "Update Template"
+    DELETE_TEMPLATE = "Delete Template"
+    COPY_NAME = "Copy Name"
+    COPY_CREATE_SQL = "Copy CREATE SQL"
+
+
+_OBJECT_TYPE_LABELS = {
+    "tables": "Table",
+    "views": "View",
+    "procedures": "Procedure",
+    "functions": "Function",
+}
+
+
+def get_available_actions(obj_type: str) -> list[ObjectAction]:
+    """Return the list of valid actions for the given object type."""
+    if obj_type == "tables":
+        return [
+            ObjectAction.VIEW_DATA,
+            ObjectAction.INSERT_TEMPLATE,
+            ObjectAction.UPDATE_TEMPLATE,
+            ObjectAction.DELETE_TEMPLATE,
+            ObjectAction.COPY_NAME,
+            ObjectAction.COPY_CREATE_SQL,
+        ]
+    if obj_type == "views":
+        return [
+            ObjectAction.VIEW_DATA,
+            ObjectAction.COPY_NAME,
+            ObjectAction.COPY_CREATE_SQL,
+        ]
+    if obj_type in ("procedures", "functions"):
+        return [
+            ObjectAction.COPY_NAME,
+            ObjectAction.COPY_CREATE_SQL,
+        ]
+    return [ObjectAction.COPY_NAME]
+
+
 class ObjectOption(Option):
     """Custom option class that stores object name and type."""
-    
+
     def __init__(self, display_text: str, obj_name: str, obj_type: str):
         super().__init__(display_text)
         self.obj_name = obj_name
         self.obj_type = obj_type
-    
+
     @property
     def value(self) -> str:
         """Return the value in format 'name|type' for compatibility."""
@@ -44,47 +91,47 @@ class Explorer(Container):
         border: round $primary;
         border-title-align: left;
     }
-    
+
     .explorer-left {
         width: 40%;
         layout: vertical;
     }
-    
+
     .explorer-right {
         width: 60%;
         layout: vertical;
     }
-    
+
     /* When in databases mode, make the left panel full width */
     Explorer.databases-mode .explorer-left {
         width: 100%;
     }
-    
+
     .search-input {
         height: 3;
         margin: 1;
     }
-    
+
     .objects-list {
         height: 1fr;
         margin: 0 1 1 1;
     }
-    
+
     .details-area {
         height: 1fr;
         margin: 1;
     }
-    
+
     #objects_list {
         scrollbar-size: 1 1;
     }
-    
+
     """
 
     def __init__(
-        self, 
-        db_adapter: DatabaseAdapter | None = None, 
-        mode: ExplorerMode = ExplorerMode.OBJECTS
+        self,
+        db_adapter: DatabaseAdapter | None = None,
+        mode: ExplorerMode = ExplorerMode.OBJECTS,
     ):
         super().__init__()
         self.db_adapter = db_adapter
@@ -95,30 +142,30 @@ class Explorer(Container):
 
     def compose(self) -> ComposeResult:
         """Create explorer layout."""
-        title = (" Database Explorer " if self.mode == ExplorerMode.OBJECTS 
+        title = (" Database Explorer " if self.mode == ExplorerMode.OBJECTS
                 else " Database Selector ")
         self.border_title = title
-        
+
         # Add CSS class for databases mode
         if self.mode == ExplorerMode.DATABASES:
             self.add_class("databases-mode")
-        
+
         with Horizontal():
             with Vertical(classes="explorer-left"):
                 yield OptionList(id="objects_list", classes="objects-list")
-                placeholder = ("Search objects..." if self.mode == ExplorerMode.OBJECTS 
+                placeholder = ("Search objects..." if self.mode == ExplorerMode.OBJECTS
                              else "Search databases...")
                 yield Input(
-                    placeholder=placeholder, 
+                    placeholder=placeholder,
                     id="search_input",
                     classes="search-input"
                 )
-            
+
             if self.mode == ExplorerMode.OBJECTS:
                 # Only show details area in objects mode
                 with Vertical(classes="explorer-right"):
                     yield TextArea(
-                        id="details_area", 
+                        id="details_area",
                         classes="details-area",
                         read_only=True,
                         language="sql",
@@ -159,7 +206,7 @@ class Explorer(Container):
         else:
             self.all_objects = []
             self.filtered_objects = []
-            
+
         # No details area in database mode, so no need to update it
 
     def _refresh_objects(self) -> None:
@@ -174,18 +221,18 @@ class Explorer(Container):
         if success and objects:
             self.objects_data = objects
             self.all_objects = []
-            
+
             for obj_type, obj_list in objects.items():
                 for obj_name in obj_list:
                     self.all_objects.append((obj_name, obj_type))
-            
+
             self.filtered_objects = self.all_objects.copy()
             self.update_objects_list()
         else:
             self.objects_data = {}
             self.all_objects = []
             self.filtered_objects = []
-            
+
         if self.mode == ExplorerMode.OBJECTS:
             details_area = self.query_one("#details_area", TextArea)
             if success:
@@ -198,7 +245,7 @@ class Explorer(Container):
         """Update the objects list display."""
         objects_list = self.query_one("#objects_list", OptionList)
         objects_list.clear_options()
-        
+
         for obj_name, obj_type in self.filtered_objects:
             if self.mode == ExplorerMode.DATABASES:
                 # Simple display for databases
@@ -207,29 +254,28 @@ class Explorer(Container):
                 # Create a formatted display string with type prefix in dim color
                 type_prefix = {
                     "tables": "t",
-                    "views": "v", 
+                    "views": "v",
                     "procedures": "p",
                     "functions": "f",
                 }.get(obj_type, "?")
-                
+
                 # Use rich markup to dim the type prefix
                 display_text = f"[dim]{type_prefix}[/dim] {obj_name}"
-            
+
             objects_list.add_option(
                 ObjectOption(display_text, obj_name, obj_type)
             )
-        
-        # Show first item details if available (but don't change focus)
-        # Only in objects mode
+
+        # Show static info for the first item if available (objects mode only)
         if self.filtered_objects and self.mode == ExplorerMode.OBJECTS:
             first_obj_name, first_obj_type = self.filtered_objects[0]
-            self.load_object_details(first_obj_name, first_obj_type)
+            self.show_static_info(first_obj_name, first_obj_type)
 
     @on(Input.Changed, "#search_input")
     def filter_objects(self, event: Input.Changed) -> None:
         """Filter objects based on search input."""
         search_term = event.value.lower()
-        
+
         if not search_term:
             self.filtered_objects = self.all_objects.copy()
         else:
@@ -237,7 +283,7 @@ class Explorer(Container):
                 (name, obj_type) for name, obj_type in self.all_objects
                 if search_term in name.lower()
             ]
-        
+
         self.update_objects_list()
 
     @on(Input.Submitted, "#search_input")
@@ -252,7 +298,7 @@ class Explorer(Container):
         # Check if the search input is focused
         search_input = self.query_one("#search_input", Input)
         objects_list = self.query_one("#objects_list", OptionList)
-        
+
         # Handle Ctrl+J (down) and Ctrl+K (up) navigation
         if event.key == "ctrl+j" or event.key == "ctrl+k":
             # Ensure objects list is focused for navigation
@@ -284,15 +330,15 @@ class Explorer(Container):
             event.prevent_default()
         elif objects_list.has_focus:
             # Check if user is typing regular characters - move to search input
-            if (len(event.key) == 1 and event.key.isprintable() and 
+            if (len(event.key) == 1 and event.key.isprintable() and
                 not event.key.isspace()):
                 # Store the character to type
                 char_to_type = event.key
-                
+
                 # Clear search and focus on input
                 search_input.value = ""
                 search_input.focus()
-                
+
                 # Use set_timer to add character after focus is fully processed
                 self.set_timer(0.01, lambda: self._add_char_to_search(char_to_type))
                 event.prevent_default()
@@ -312,48 +358,183 @@ class Explorer(Container):
 
     @on(OptionList.OptionSelected, "#objects_list")
     def on_option_selected(self, event: OptionList.OptionSelected) -> None:
-        """Handle option selection - either object details or database selection."""
+        """Handle option selection - push the action menu in objects mode."""
+        if self.mode != ExplorerMode.OBJECTS:
+            return
         if not event.option or not event.option.value:
             return
-            
+
         obj_name, obj_type = event.option.value.split("|", 1)
-        
-        if self.mode == ExplorerMode.OBJECTS:
-            self.load_object_details(obj_name, obj_type)
-        # In databases mode, selection will be handled by the parent modal
+        self._open_action_menu(obj_name, obj_type)
 
     @on(OptionList.OptionHighlighted, "#objects_list")
     def show_object_details_on_highlight(
         self, event: OptionList.OptionHighlighted
     ) -> None:
-        """Show details of the highlighted object (navigation with arrow keys)."""
+        """Show static info of the highlighted object (navigation with arrow keys)."""
+        if self.mode != ExplorerMode.OBJECTS:
+            return
         if not event.option or not event.option.value:
             return
-            
-        obj_name, obj_type = event.option.value.split("|", 1)
-        
-        if self.mode == ExplorerMode.OBJECTS:
-            self.load_object_details(obj_name, obj_type)
 
-    def load_object_details(self, obj_name: str, obj_type: str) -> None:
-        """Load and display details for a specific object."""
+        obj_name, obj_type = event.option.value.split("|", 1)
+        self.show_static_info(obj_name, obj_type)
+
+    def show_static_info(self, obj_name: str, obj_type: str) -> None:
+        """Show static info (type, columns, row count) for the object."""
         if not self.db_adapter or self.mode != ExplorerMode.OBJECTS:
             return
 
         details_area = self.query_one("#details_area", TextArea)
-        details_area.text = "Loading..."
+        type_label = _OBJECT_TYPE_LABELS.get(obj_type, obj_type)
+        lines: list[str] = [
+            f"[bold]{type_label}[/bold]: {obj_name}",
+            "",
+        ]
 
-        # Use the adapter method to get creation SQL
-        success, message, creation_sql = self.db_adapter.get_object_creation_sql(
-            obj_name, obj_type
-        )
-        
-        if success and creation_sql:
-            details_text = creation_sql
+        if obj_type in ("tables", "views"):
+            success, message, columns = self.db_adapter.get_object_columns_detailed(
+                obj_name
+            )
+            if success and columns:
+                lines.append(f"[bold]Columns[/bold] ({len(columns)}):")
+                for col_name, col_type in columns:
+                    lines.append(f"  - {col_name}  [dim]{col_type}[/dim]")
+            else:
+                lines.append(f"[dim]Columns unavailable: {message}[/dim]")
+
+            if obj_type == "tables":
+                success, message, count = self.db_adapter.get_row_count(obj_name)
+                if success and count is not None:
+                    lines.append("")
+                    lines.append(f"[bold]Rows[/bold]: {count}")
+                else:
+                    lines.append("")
+                    lines.append(f"[dim]Row count unavailable: {message}[/dim]")
         else:
-            details_text = f"Error loading details: {message}"
+            # Procedures / functions: show creation SQL as static info
+            success, message, creation_sql = (
+                self.db_adapter.get_object_creation_sql(obj_name, obj_type)
+            )
+            if success and creation_sql:
+                lines.append("[bold]Definition[/bold]:")
+                lines.append(creation_sql)
+            else:
+                lines.append(f"[dim]Definition unavailable: {message}[/dim]")
 
-        details_area.text = details_text
+        details_area.text = "\n".join(lines)
+
+    def _open_action_menu(self, obj_name: str, obj_type: str) -> None:
+        """Push the action menu modal for the given object."""
+        actions = get_available_actions(obj_type)
+        modal = ObjectActionModal(obj_name, obj_type, actions)
+
+        def _on_action(result: ObjectAction | None) -> None:
+            if result is None:
+                return
+            # Delegate to the parent modal via the app
+            parent_modal = self.app.screen
+            if isinstance(parent_modal, ExplorerModal):
+                parent_modal._dispatch_action(obj_name, obj_type, result)
+
+        self.app.push_screen(modal, _on_action)
+
+
+class ObjectActionModal(ModalScreen[ObjectAction | None]):
+    """Modal that shows the available actions for a database object."""
+
+    DEFAULT_CSS = """
+    ObjectActionModal {
+        align: center middle;
+    }
+
+    .action-dialog {
+        width: 50%;
+        height: auto;
+        max-height: 70%;
+        border: round $primary;
+        padding: 1 2;
+    }
+
+    .action-dialog > OptionList {
+        height: auto;
+        margin: 1 0 0 0;
+    }
+
+    .action-title {
+        height: 1;
+        content-align: center middle;
+        text-style: bold;
+    }
+
+    .action-hint {
+        height: 1;
+        content-align: center middle;
+        color: $text-muted;
+    }
+    """
+
+    def __init__(
+        self,
+        obj_name: str,
+        obj_type: str,
+        actions: list[ObjectAction],
+    ):
+        super().__init__()
+        self.obj_name = obj_name
+        self.obj_type = obj_type
+        self.actions = actions
+
+    def compose(self) -> ComposeResult:
+        """Create modal layout."""
+        type_label = _OBJECT_TYPE_LABELS.get(self.obj_type, self.obj_type)
+        with Container(classes="action-dialog"):
+            yield Static(
+                f"{type_label}: {self.obj_name}",
+                id="action_title",
+                classes="action-title",
+            )
+            yield OptionList(
+                *[Option(action.value) for action in self.actions],
+                id="action_list",
+            )
+            yield Static(
+                "Enter to select, Esc to cancel",
+                id="action_hint",
+                classes="action-hint",
+            )
+
+    def on_mount(self) -> None:
+        """Focus the action list when the modal opens."""
+        action_list = self.query_one("#action_list", OptionList)
+        if self.actions:
+            action_list.focus()
+
+    @on(OptionList.OptionSelected, "#action_list")
+    def on_action_selected(
+        self, event: OptionList.OptionSelected
+    ) -> None:
+        """Handle selection of an action."""
+        if event.option is None:
+            return
+        index = event.option_list.highlighted
+        if index is None or index < 0 or index >= len(self.actions):
+            return
+        self.dismiss(self.actions[index])
+
+    def on_key(self, event) -> None:
+        """Handle Enter and Escape keys."""
+        if event.key == "escape":
+            event.prevent_default()
+            event.stop()
+            self.dismiss(None)
+        elif event.key == "enter":
+            action_list = self.query_one("#action_list", OptionList)
+            index = action_list.highlighted
+            if index is not None and 0 <= index < len(self.actions):
+                event.prevent_default()
+                event.stop()
+                self.dismiss(self.actions[index])
 
 
 class ExplorerModal(ModalScreen[str | None]):
@@ -363,7 +544,7 @@ class ExplorerModal(ModalScreen[str | None]):
     ExplorerModal {
         align: center middle;
     }
-    
+
     .explorer-dialog {
         width: 90%;
         height: 80%;
@@ -371,13 +552,15 @@ class ExplorerModal(ModalScreen[str | None]):
     """
 
     def __init__(
-        self, 
-        db_adapter: DatabaseAdapter | None = None, 
-        mode: ExplorerMode = ExplorerMode.OBJECTS
+        self,
+        db_adapter: DatabaseAdapter | None = None,
+        mode: ExplorerMode = ExplorerMode.OBJECTS,
+        on_action: Callable[[str, str, ObjectAction], None] | None = None,
     ):
         super().__init__()
         self.db_adapter = db_adapter
         self._mode = mode
+        self._on_action = on_action
 
     def compose(self) -> ComposeResult:
         """Create modal layout."""
@@ -395,6 +578,16 @@ class ExplorerModal(ModalScreen[str | None]):
         self.db_adapter = adapter
         if adapter:
             self.explorer.set_adapter(adapter)
+
+    def _dispatch_action(
+        self, obj_name: str, obj_type: str, action: ObjectAction
+    ) -> None:
+        """Forward a chosen action to the caller and close the modal."""
+        if self._on_action is not None:
+            with contextlib.suppress(Exception):
+                # Defensive: never let a callback error break the modal stack
+                self._on_action(obj_name, obj_type, action)
+        self.dismiss(None)
 
     def on_key(self, event) -> None:
         """Handle key events."""
@@ -414,7 +607,7 @@ class ExplorerModal(ModalScreen[str | None]):
         """Get the currently selected database name (for databases mode)."""
         if self._mode != ExplorerMode.DATABASES:
             return None
-        
+
         objects_list = self.explorer.query_one("#objects_list", OptionList)
         if objects_list.highlighted is not None and objects_list.options:
             selected_option = objects_list.options[objects_list.highlighted]
@@ -423,7 +616,7 @@ class ExplorerModal(ModalScreen[str | None]):
                 return db_name
         return None
 
-    @property 
+    @property
     def mode(self) -> ExplorerMode:
         """Get the current mode."""
         return self._mode

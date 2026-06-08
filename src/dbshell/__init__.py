@@ -15,7 +15,7 @@ from textual.widgets import (
 from tree_sitter import Parser
 
 from dbshell.database import DatabaseAdapter, DatabaseFactory
-from dbshell.explorer import ExplorerModal, ExplorerMode
+from dbshell.explorer import ExplorerModal, ExplorerMode, ObjectAction
 from dbshell.suggestions import SuggestionProvider, AutoCompleteWidget
 
 
@@ -516,10 +516,104 @@ class DBShellApp(App):
         if not self.adapter.database:
             self.notify("Please select a database first", severity="warning")
             return
-        
-        # Create and show the explorer modal
-        explorer_modal = ExplorerModal(self.adapter, mode=ExplorerMode.OBJECTS)
+
+        # Create and show the explorer modal with an action callback
+        explorer_modal = ExplorerModal(
+            self.adapter,
+            mode=ExplorerMode.OBJECTS,
+            on_action=self._on_explorer_action,
+        )
         await self.push_screen(explorer_modal)
+
+    def _on_explorer_action(
+        self, obj_name: str, obj_type: str, action: ObjectAction
+    ) -> None:
+        """Handle the action chosen from the explorer's object action menu."""
+        self.call_later(self._handle_object_action, obj_name, obj_type, action)
+
+    async def _handle_object_action(
+        self, obj_name: str, obj_type: str, action: ObjectAction
+    ) -> None:
+        """Apply the chosen explorer action to the editor or clipboard."""
+        if not self.connected:
+            self.notify("No database connection", severity="error")
+            return
+
+        quoted = self.adapter.quote_identifier(obj_name)
+
+        if action == ObjectAction.VIEW_DATA:
+            sql = f"SELECT * FROM {quoted};"
+            self._replace_editor_text(sql)
+            return
+
+        if action in (
+            ObjectAction.INSERT_TEMPLATE,
+            ObjectAction.UPDATE_TEMPLATE,
+            ObjectAction.DELETE_TEMPLATE,
+        ):
+            success, message, columns = (
+                self.adapter.get_object_columns_detailed(obj_name)
+            )
+            if not success or not columns:
+                self.notify(
+                    f"Cannot build template: {message}",
+                    severity="error",
+                )
+                return
+            column_names = [c[0] for c in columns]
+            placeholders = ", ".join("?" for _ in column_names)
+            quoted_columns = ", ".join(
+                self.adapter.quote_identifier(c) for c in column_names
+            )
+            if action == ObjectAction.INSERT_TEMPLATE:
+                sql = (
+                    f"INSERT INTO {quoted} ({quoted_columns}) "
+                    f"VALUES ({placeholders});"
+                )
+            elif action == ObjectAction.UPDATE_TEMPLATE:
+                assignments = ", ".join(
+                    f"{self.adapter.quote_identifier(c)} = ?"
+                    for c in column_names
+                )
+                sql = (
+                    f"UPDATE {quoted} SET {assignments} WHERE ...;"
+                )
+            else:
+                sql = f"DELETE FROM {quoted} WHERE ...;"
+            self._replace_editor_text(sql)
+            return
+
+        if action == ObjectAction.COPY_NAME:
+            try:
+                clipboard.copy(obj_name)
+                self.notify(f"Copied name '{obj_name}' to clipboard")
+            except Exception as exc:
+                self.notify(f"Copy failed: {exc}", severity="error")
+            return
+
+        if action == ObjectAction.COPY_CREATE_SQL:
+            success, message, creation_sql = (
+                self.adapter.get_object_creation_sql(obj_name, obj_type)
+            )
+            if not success or not creation_sql:
+                self.notify(
+                    f"Cannot copy CREATE SQL: {message}",
+                    severity="error",
+                )
+                return
+            try:
+                clipboard.copy(creation_sql)
+                self.notify("Copied CREATE SQL to clipboard")
+            except Exception as exc:
+                self.notify(f"Copy failed: {exc}", severity="error")
+            return
+
+    def _replace_editor_text(self, text: str) -> None:
+        """Replace the editor text with the given SQL and return focus to it."""
+        editor = self.query_one(QueryEditor)
+        editor.text = text
+        self.set_focus(editor)
+        self.notify("SQL inserted into editor — press F8 to run")
 
     async def navigate_record(self, direction: int) -> None:
         """Navigate to previous (-1) or next (1) record in vertical view."""
