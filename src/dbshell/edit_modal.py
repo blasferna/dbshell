@@ -78,7 +78,8 @@ class RecordEditModal(ModalScreen[bool | None]):
     }
 
     .field-label {
-        width: 18;
+        width: auto;
+        min-width: 18;
         content-align: right middle;
         padding-right: 1;
         color: $text;
@@ -165,6 +166,7 @@ class RecordEditModal(ModalScreen[bool | None]):
         self._inputs: dict[str, Input] = {}
         self._null_boxes: dict[str, Checkbox] = {}
         self._read_only: dict[str, str] = {}
+        self._labels: list[Static] = []
         self._status_widget: Static | None = None
 
     def compose(self) -> ComposeResult:
@@ -182,14 +184,18 @@ class RecordEditModal(ModalScreen[bool | None]):
                     with Horizontal(classes="field-row"):
                         if column in self.primary_keys:
                             label = f"[bold]{column}[/bold] [dim](PK)[/dim]"
-                            yield Static(label, classes="field-label")
+                            label_widget = Static(label, classes="field-label")
+                            self._labels.append(label_widget)
+                            yield label_widget
                             yield Static(
                                 _format_value_for_input(value) or "[dim]NULL[/dim]",
                                 classes="field-readonly",
                             )
                             self._read_only[column] = _format_value_for_input(value)
                         else:
-                            yield Static(column, classes="field-label")
+                            label_widget = Static(column, classes="field-label")
+                            self._labels.append(label_widget)
+                            yield label_widget
                             is_null = value is None
                             input_widget = Input(
                                 value="" if is_null else _format_value_for_input(value),
@@ -221,7 +227,21 @@ class RecordEditModal(ModalScreen[bool | None]):
                 yield Button("Save", id="edit_save_btn", variant="primary")
 
     def on_mount(self) -> None:
-        """Focus the first editable input when the modal opens."""
+        """Focus the first editable input and align all field labels."""
+        max_text_len = 0
+        for column in self.columns:
+            if column in self.primary_keys:
+                text_len = len(column) + len(" (PK)")
+            else:
+                text_len = len(column)
+            if text_len > max_text_len:
+                max_text_len = text_len
+
+        # +1 accounts for the padding-right on .field-label.
+        label_width = max(18, max_text_len + 1)
+        for label in self._labels:
+            label.styles.width = label_width
+
         for widget in self._inputs.values():
             if not widget.disabled:
                 widget.focus()
