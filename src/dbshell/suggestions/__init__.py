@@ -8,15 +8,18 @@ This module provides intelligent SQL autocompletion with:
 - Configurable and extensible architecture
 """
 
+from .completers import Completion, MemberCompleter, WordCompleter
+from .context import ContextType, SQLContext
 from .provider import SuggestionProvider
-from .context import SQLContext, ContextType
-from .ui import AutoCompleteWidget, SuggestionItem, SuggestionCategory
+from .ui import SuggestionCategory, SuggestionItem
 
 __all__ = [
-    "SuggestionProvider",
-    "SQLContext",
+    "Completion",
     "ContextType",
-    "AutoCompleteWidget",
-    "SuggestionItem",
+    "MemberCompleter",
+    "SQLContext",
     "SuggestionCategory",
+    "SuggestionItem",
+    "SuggestionProvider",
+    "WordCompleter",
 ]

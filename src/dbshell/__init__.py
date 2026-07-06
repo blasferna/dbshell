@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 import clipboard
-from textual import events, on
+from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
@@ -12,9 +12,10 @@ from textual.widgets import (
     Button,
     DataTable,
     Footer,
-    TextArea,
 )
-from tree_sitter import Parser
+from textual_textarea import TextEditor
+from textual_textarea.messages import TextAreaClipboardError
+from textual_textarea.text_editor import TextAreaPlus
 
 from dbshell.database import DatabaseAdapter, DatabaseFactory
 from dbshell.edit_modal import RecordEditModal
@@ -28,161 +29,135 @@ from dbshell.exporters import (
     to_tsv,
 )
 from dbshell.sql_utils import extract_source_table
-from dbshell.suggestions import AutoCompleteWidget, SuggestionProvider
+from dbshell.suggestions import MemberCompleter, WordCompleter
+from dbshell.suggestions.completers import SEPARATOR_PROG
+from dbshell.suggestions.context import SQLContextAnalyzer
 
 
-class QueryEditor(TextArea):
+class QueryEditor(TextEditor):
+    """SQL query editor powered by textual-textarea."""
+
     BINDINGS = [
         Binding("ctrl+e", "show_explorer", "Show Explorer"),
         Binding("ctrl+d", "select_database", "Select Database"),
         Binding("ctrl+r", "execute_query", "Execute Query"),
         Binding("f8", "execute_query", "Execute Query"),
-        Binding("ctrl+a", "select_all", "Select All"),
-        Binding("ctrl+c", "copy", "Copy"),
-        Binding("ctrl+v", "paste", "Paste"),
     ]
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.suggestion_provider = None
+    def __init__(
+        self,
+        word_completer: WordCompleter | None = None,
+        member_completer: MemberCompleter | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(
+            language="sql",
+            theme="css",
+            word_completer=word_completer,
+            member_completer=member_completer,
+            **kwargs,
+        )
+
+    def on_mount(self) -> None:
+        """Increase the completion list width to reduce truncation."""
+        super().on_mount()
+        self.completion_list.INNER_CONTENT_WIDTH = 60
+
+    def _resolve_member_prefix(self, prefix: str) -> str:
+        """Resolve table aliases in member completion prefixes."""
+        if self.text_input is None or "." not in prefix:
+            return prefix
+        parts = SEPARATOR_PROG.split(prefix)
+        if len(parts) < 2:
+            return prefix
+        alias = parts[-2].strip('"\'`')
+        item = parts[-1]
+        try:
+            # Analyze the whole query to resolve aliases.
+            context = SQLContextAnalyzer().analyze(self.text, (0, 0))
+        except Exception:
+            return prefix
+        table_name = context.get_table_by_ref(alias)
+        if table_name:
+            return f"{table_name}.{item}"
+        return prefix
+
+    def _member_completer_with_alias(self, prefix: str) -> list[tuple[str, str]]:
+        """Return member completions with values prefixed by the user's alias/table."""
+        resolved_prefix = self._resolve_member_prefix(prefix)
+        alias = prefix.rsplit(".", 1)[0] if "." in prefix else prefix
+        matches = self.member_completer(resolved_prefix)
+        return [(prompt, f"{alias}.{value}") for prompt, value in matches]
+
+    @on(TextAreaPlus.ShowCompletionList)
+    def update_completers_and_completion_list_offset(
+        self, event: TextAreaPlus.ShowCompletionList
+    ) -> None:
+        """Show completions, resolving table aliases for member access."""
+        event.stop()
+        assert self.text_input is not None
+        prefix = event.prefix
+        active = self.text_input.completer_active
+        # textual-textarea sometimes reports active=None for member prefixes,
+        # so detect member completion from the prefix itself and ensure the
+        # editor state is updated so keybindings for selecting completions work.
+        if active == "member" or (prefix and prefix[-1] == "."):
+            active = "member"
+            self.text_input.completer_active = "member"
+        region_x, region_y, _, _ = self.text_input.region
+        self.completion_list.cursor_offset = self.text_input.cursor_screen_offset - (
+            region_x,
+            region_y,
+        )
+        if active == "path":
+            self.completion_list.show_completions(prefix, self.path_completer)
+        elif active == "member":
+            self.completion_list.show_completions(
+                prefix, self._member_completer_with_alias
+            )
+        elif active == "word":
+            self.completion_list.show_completions(prefix, self.word_completer)
 
     async def action_execute_query(self) -> None:
-        """Handle f8 keyboard shortcut."""
+        """Handle execute query shortcut."""
         await self.app.action_execute_query()
-        
+
     async def action_show_explorer(self) -> None:
-        """Handle Ctrl+E to show database explorer."""
+        """Handle show explorer shortcut."""
         await self.app.action_show_explorer()
-        
+
     async def action_select_database(self) -> None:
-        """Handle Ctrl+D to select database."""
+        """Handle select database shortcut."""
         await self.app.action_select_database()
 
-    async def action_select_all(self) -> None:
-        """Handle Ctrl+A to select all text in the editor."""
-        self.select_all()
 
-    async def action_copy(self) -> None:
-        """Handle Ctrl+C to copy selected text"""
-        if self.selection.start != self.selection.end:
-            selected_text = self.selected_text
-            clipboard.copy(selected_text)
-
-    async def action_paste(self) -> None:
-        """Handle Ctrl+V to paste text from clipboard"""
-        paste_text = clipboard.paste()
-        if not paste_text:
-            return
-
-        start = self.selection.start
-        end = self.selection.end
-
-        if start != end:
-            self.replace(paste_text, start, end)
-        else:
-            cursor_loc = self.cursor_location
-            self.replace(paste_text, cursor_loc, cursor_loc)
-
-    @property
-    def parser(self) -> Parser:
-        return self.document._parser
-
-    def action_accept_suggestion(self) -> None:
-        autocomplete = self.app.query_one(AutoCompleteWidget)
-        if autocomplete.is_visible:
-            suggestion = autocomplete.get_selected_suggestion()
-            if suggestion:
-                self._apply_suggestion(suggestion)
-                autocomplete.hide()
-
-    def _apply_suggestion(self, suggestion: str) -> None:
-        """Apply the selected suggestion to the text area."""
-        # Get current cursor position
-        cursor_line, cursor_col = self.cursor_location
-        text_lines = self.text.split("\n")
-
-        if cursor_line < len(text_lines):
-            current_line = text_lines[cursor_line]
-
-            # Parse to find what we're replacing using tree-sitter
-            tree = self.parser.parse(bytes(self.text, "utf8"))
-            point = (cursor_line, cursor_col)
-            leaf = tree.root_node.descendant_for_point_range(point, point)
-
-            if leaf and leaf.type == "identifier":
-                # Replace the identifier
-                start_line, start_col = leaf.start_point
-                end_line, end_col = leaf.end_point
-
-                # Replace the text
-                self.replace(suggestion, (start_line, start_col), (end_line, end_col))
-            else:
-                # Find word boundaries for partial completion
-                start_col = cursor_col
-                end_col = cursor_col
-
-                # Find start of current word (look for word characters)
-                while start_col > 0 and (
-                    current_line[start_col - 1].isalnum()
-                    or current_line[start_col - 1] == "_"
-                ):
-                    start_col -= 1
-
-                # Find end of current word
-                while end_col < len(current_line) and (
-                    current_line[end_col].isalnum() or current_line[end_col] == "_"
-                ):
-                    end_col += 1
-
-                # Replace the word or insert at cursor
-                if start_col < end_col:
-                    # There's a partial word to replace
-                    self.replace(
-                        suggestion, (cursor_line, start_col), (cursor_line, end_col)
-                    )
-                else:
-                    # No word to replace, just insert
-                    self.insert(suggestion, (cursor_line, cursor_col))
-
-    @on(events.Key)
-    def on_key(self, event: events.Key) -> None:
-        autocomplete = self.app.query_one(AutoCompleteWidget)
-
-        if autocomplete.is_visible:
-            if event.key == "escape":
-                autocomplete.hide()
-                event.prevent_default()
-            elif event.key == "up":
-                autocomplete.move_cursor(down=False)
-                event.prevent_default()
-                event.stop()  # Stop event propagation
-            elif event.key == "down":
-                autocomplete.move_cursor(down=True)
-                event.prevent_default()
-                event.stop()  # Stop event propagation
-            elif event.key == "enter":
-                self.action_accept_suggestion()
-                event.prevent_default()
-                event.stop()  # Stop event propagation
-            elif event.key == "space":
-                # Hide autocomplete on space
-                autocomplete.hide()
-        elif event.key == "escape":
-            autocomplete.hide()
+# Prevent TextEditor's inherited completion handler from also running.
+_inherited_handlers = dict(TextEditor._decorated_handlers)
+_inherited_handlers.pop(TextAreaPlus.ShowCompletionList, None)
+TextEditor._decorated_handlers = _inherited_handlers
 
 
 class EditorPanel(Container):
     """Container for the query editor."""
+
+    def __init__(
+        self,
+        word_completer: WordCompleter | None = None,
+        member_completer: MemberCompleter | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.word_completer = word_completer
+        self.member_completer = member_completer
 
     def compose(self) -> ComposeResult:
         """Create editor panel layout."""
         self.border_title = "Query Editor"
         yield QueryEditor(
             id="query_editor",
-            show_line_numbers=True,
-            language="sql",
+            word_completer=self.word_completer,
+            member_completer=self.member_completer,
         )
-        yield AutoCompleteWidget(id="autocomplete")
 
 
 class ResultViewer(Container):
@@ -210,7 +185,7 @@ class ResultViewer(Container):
         yield DataTable(id="results_table", zebra_stripes=True, cursor_type="row")
 
 
-class DBShellApp(App):
+class DBShellApp(App, inherit_bindings=False):
     """Main TUI application for database shell with modern layout."""
 
     CSS = """
@@ -283,18 +258,52 @@ class DBShellApp(App):
         margin: 0;
         padding: 0;
     }
-    
+
     TextArea:focus {
         border: none !important;
         margin: 0;
         padding: 0;
+    }
+
+    /* Autocomplete dropdown styling to match the original DBShell look */
+    QueryEditor CompletionList {
+        layer: tooltips;
+        background: $surface;
+        border: tall $primary;
+        width: auto;
+        min-width: 20;
+        max-width: 70;
+        max-height: 12;
+        padding: 0;
+    }
+
+    QueryEditor CompletionList.open {
+        display: block;
+    }
+
+    QueryEditor CompletionList > .option-list--option {
+        padding: 0 1;
+    }
+
+    QueryEditor CompletionList > .option-list--option-highlighted {
+        background: $primary 30%;
+        color: $text;
+        text-style: bold;
+    }
+
+    QueryEditor CompletionList .completion-list--type-label {
+        color: $text-muted;
+    }
+
+    QueryEditor CompletionList .completion-list--type-label-highlighted {
+        color: $text-muted;
     }
     """
 
     BINDINGS = [
         ("ctrl+r", "execute_query", "Execute Query"),
         ("f8", "execute_query", "Execute Query"),
-        ("ctrl+v", "toggle_view", "Toggle View"),
+        ("ctrl+t", "toggle_view", "Toggle View"),
         ("ctrl+e", "show_explorer", "Database Explorer"),
         ("ctrl+d", "select_database", "Select Database"),
         ("ctrl+u", "edit_record", "Edit Record"),
@@ -318,12 +327,16 @@ class DBShellApp(App):
         self.last_select_query: str | None = None
         self.source_table: str | None = None
         self.title = "Dbshell"
-        self.suggestion_provider = SuggestionProvider(self.adapter)
+        self.word_completer = WordCompleter(self.adapter)
+        self.member_completer = MemberCompleter(self.adapter)
 
     def compose(self) -> ComposeResult:
         """Create the main modern application layout."""
         with Vertical(classes="main-container"):
-            yield EditorPanel()
+            yield EditorPanel(
+                word_completer=self.word_completer,
+                member_completer=self.member_completer,
+            )
             with Horizontal(classes="action-panel"):
                 with Container(classes="select-database-container"):
                     yield Button(
@@ -372,9 +385,6 @@ class DBShellApp(App):
 
     async def on_mount(self) -> None:
         """Initialize the application after mounting."""
-        editor = self.query_one(QueryEditor)
-        editor.suggestion_provider = self.suggestion_provider
-
         # Try to connect to database (without selecting a specific database first)
         success, message = self.adapter.connect()
         if success:
@@ -388,64 +398,40 @@ class DBShellApp(App):
             self.notify(message, severity="error")
 
     async def refresh_database(self) -> None:
-        """Update the database selector button text"""
+        """Update the database selector button and refresh autocomplete schema."""
         if not self.connected:
             return
 
         database_selector = self.query_one("#database_selector", Button)
-        
-        # If we have a current database, show it
+
+        # If we have a current database, show it and load schema completions
         if self.adapter.database:
             database_selector.label = self.adapter.database
+            self.word_completer.update_schema()
+            self.member_completer.update_schema()
         else:
             database_selector.label = "Select Database"
+            self.word_completer.clear_schema()
+            self.member_completer.clear_schema()
 
 
-    @on(TextArea.Changed, "#query_editor")
-    async def on_text_area_changed(self, event: TextArea.Changed) -> None:
-        autocomplete = self.query_one(AutoCompleteWidget)
-
-        text = event.text_area.text
-        cursor_pos = event.text_area.cursor_location
-
-        # Update autocomplete's target state for word bounds detection
-        autocomplete.update_target_state(text, cursor_pos)
-
-        # Get suggestions from the provider (filtering is now done internally)
-        suggestions = self.suggestion_provider.get_suggestions(
-            text, cursor_pos, event.text_area.parser
+    @on(TextAreaClipboardError)
+    def on_text_area_clipboard_error(self) -> None:
+        """Notify the user when the editor cannot access the system clipboard."""
+        self.notify(
+            "Could not access the system clipboard. "
+            "Copy/paste may still work inside the editor.",
+            severity="warning",
         )
-
-        if suggestions:
-            # Calculate the position relative to the TextArea
-            row, col = cursor_pos
-
-            # Get the TextArea widget
-            text_area = event.text_area
-
-            # Calculate absolute position based on TextArea's position
-            text_area_region = text_area.region
-
-            # Position it below the cursor line, accounting for TextArea's position
-            absolute_row = text_area_region.y + row + 1
-            absolute_col = text_area_region.x + col
-
-            # If line numbers are shown, add offset for line number column
-            if text_area.show_line_numbers:
-                absolute_col += 4
-
-            autocomplete.show_suggestions(suggestions, (absolute_col, absolute_row))
-        else:
-            autocomplete.hide()
 
     @on(Button.Pressed, "#database_selector")
     async def on_database_selector_pressed(self) -> None:
         """Handle database selector button press."""
         await self.action_select_database()
 
-    def get_current_editor(self) -> TextArea:
+    def get_current_editor(self) -> QueryEditor:
         """Get the query editor."""
-        return self.query_one("#query_editor", TextArea)
+        return self.query_one("#query_editor", QueryEditor)
 
     def update_results_info(self, message: str) -> None:
         """Update results info silently."""
@@ -541,6 +527,9 @@ class DBShellApp(App):
             # Update the database selector button
             database_selector = self.query_one("#database_selector", Button)
             database_selector.label = database
+            # Refresh autocomplete schema for the new database
+            self.word_completer.update_schema()
+            self.member_completer.update_schema()
             # Clear current results when changing database
             self.current_columns = []
             self.current_rows = []
@@ -939,7 +928,8 @@ class DBShellApp(App):
                 results_table = self.query_one("#results_table", DataTable)
                 results_table.clear(columns=True)
 
-                # Check if this was a database-related query and refresh the database list
+                # Check if this was a database-related query and refresh the
+                # database list.
                 query_upper = query.strip().upper()
                 if any(
                     cmd in query_upper for cmd in ["CREATE DATABASE", "DROP DATABASE"]
@@ -1001,7 +991,7 @@ class DBShellApp(App):
             for value in row:
                 if value is None:
                     str_row.append("[dim]NULL[/dim]")
-                elif isinstance(value, (int, float)):
+                elif isinstance(value, int | float):
                     str_row.append(str(value))
                 elif isinstance(value, str):
                     # Truncate very long strings for display
@@ -1040,13 +1030,13 @@ class DBShellApp(App):
             results_table.add_row("", "")
 
         # Show the current record in vertical format
-        for i, (column_name, value) in enumerate(
-            zip(columns, current_row, strict=False)
+        for column_name, value in zip(
+            columns, current_row, strict=False
         ):
             # Format the value
             if value is None:
                 formatted_value = "[dim]NULL[/dim]"
-            elif isinstance(value, (int, float)):
+            elif isinstance(value, int | float):
                 formatted_value = str(value)
             elif isinstance(value, str):
                 # Don't truncate in vertical view as we have more space

@@ -26,6 +26,7 @@ classifiers = [
 ]
 dependencies = [
     "textual>=0.41.0",
+    "textual-textarea>=0.17.0",
     "mysql-connector-python>=8.0.33",
     "tree-sitter>=0.25.1",
     "tree-sitter-sql>=0.3.8",
