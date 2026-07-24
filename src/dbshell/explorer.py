@@ -548,13 +548,10 @@ class ExplorerModal(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         """Create modal layout."""
         with Container(classes="explorer-dialog"):
+            # The explorer refreshes itself on mount with this adapter, so
+            # no extra refresh is needed here.
             self.explorer = Explorer(self.db_adapter, self._mode)
             yield self.explorer
-
-    def on_mount(self) -> None:
-        """Initialize the modal when mounted."""
-        if self.db_adapter:
-            self.explorer.set_adapter(self.db_adapter)
 
     def set_adapter(self, adapter: DatabaseAdapter | None) -> None:
         """Set the database adapter and refresh objects."""

@@ -9,7 +9,9 @@ A simple Text User Interface (TUI) application for executing SQL queries against
 
 ## Features
 * Connect to MySQL databases and SQLite database files
-* Execute SQL queries
+* Execute SQL queries in a background thread, so the UI stays responsive; the Results panel shows the row count and elapsed time
+* Run multi-statement scripts: statements separated by `;` execute sequentially, the last result set is displayed, and execution stops at the first failing statement
+* Row limit for SELECTs (default 1000): the toolbar **LIMIT** dropdown appends `LIMIT N` to SELECT statements that do not already have one, so large tables do not flood the UI. Pick **No LIMIT** to turn it off, or set the initial value with `--max-rows` (`0` disables it). A fetch safety net also caps results if a query asks for more rows than the current limit.
 * View query results in a tabular format (switch between horizontal and vertical views with **Ctrl+T**)
 * Edit the currently selected record (Ctrl+U): opens an in-place form pre-filled with the row's values, runs an `UPDATE` against the table, and refreshes the results automatically. The source table is auto-detected from simple `SELECT ... FROM <table>` queries and primary-key columns are used to build the `WHERE` clause.
 * Copy the active row as JSON to the clipboard (Ctrl+J). Works in both horizontal and vertical view; the output is a pretty-printed object keyed by column name.
@@ -43,4 +45,14 @@ dbshell --host <hostname> --user <username> --password <password> [--database <d
 
 ```
 dbshell <path_to_sqlite_db_file>
+```
+
+Both modes accept `--max-rows N` to set the initial SELECT row limit (default: 1000, `0` = no limit). While the app is running, change or disable it with the **LIMIT** dropdown in the toolbar. Queries that already include their own `LIMIT` are left alone.
+
+## Development
+
+```
+uv sync --dev
+uv run ruff check .
+uv run pytest
 ```

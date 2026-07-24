@@ -206,7 +206,9 @@ class SQLContextAnalyzer:
         
         return tables
     
-    def _is_in_string(self, text_before: str, current_line: str, cursor_col: int) -> bool:
+    def _is_in_string(
+        self, text_before: str, current_line: str, cursor_col: int
+    ) -> bool:
         """Check if cursor is inside a string literal."""
         # Count quotes on current line before cursor
         line_before = current_line[:cursor_col]
@@ -228,7 +230,9 @@ class SQLContextAnalyzer:
         
         return (single_quotes % 2 == 1) or (double_quotes % 2 == 1)
     
-    def _is_in_comment(self, text_before: str, current_line: str, cursor_col: int) -> bool:
+    def _is_in_comment(
+        self, text_before: str, current_line: str, cursor_col: int
+    ) -> bool:
         """Check if cursor is inside a comment."""
         line_before = current_line[:cursor_col]
         
@@ -350,33 +354,35 @@ class SQLContextAnalyzer:
         _, last_keyword, initial_ctx = keywords_positions[0]
         
         # Special handling for context transitions
-        if initial_ctx == ContextType.SELECT_COLUMNS:
-            # Check if FROM has been added after SELECT
-            if 'FROM' in upper_text[upper_text.rfind('SELECT'):]:
-                # We're past the SELECT columns, check what context we're in
-                from_pos = upper_text.rfind('FROM')
-                remaining = upper_text[from_pos + 4:].strip()
-                
-                if not remaining:
-                    return ContextType.FROM_TABLES
-                
-                # Check for subsequent clauses
-                for kw, ctx in [
-                    ('WHERE', ContextType.WHERE_CONDITION),
-                    ('ORDER BY', ContextType.ORDER_BY),
-                    ('GROUP BY', ContextType.GROUP_BY),
-                    ('HAVING', ContextType.HAVING),
-                    ('JOIN', ContextType.FROM_TABLES),
-                    ('ON', ContextType.ON_CONDITION),
-                ]:
-                    if kw in remaining.upper():
-                        kw_pos = remaining.upper().rfind(kw)
-                        after_kw = remaining[kw_pos + len(kw):].strip()
-                        if not after_kw or (after_kw and not self._looks_like_complete_clause(after_kw, kw)):
-                            return ctx
-                
-                # Default: we're in FROM clause listing tables
+        if initial_ctx == ContextType.SELECT_COLUMNS and (
+            'FROM' in upper_text[upper_text.rfind('SELECT'):]
+        ):
+            # We're past the SELECT columns, check what context we're in
+            from_pos = upper_text.rfind('FROM')
+            remaining = upper_text[from_pos + 4:].strip()
+
+            if not remaining:
                 return ContextType.FROM_TABLES
+
+            # Check for subsequent clauses
+            for kw, ctx in [
+                ('WHERE', ContextType.WHERE_CONDITION),
+                ('ORDER BY', ContextType.ORDER_BY),
+                ('GROUP BY', ContextType.GROUP_BY),
+                ('HAVING', ContextType.HAVING),
+                ('JOIN', ContextType.FROM_TABLES),
+                ('ON', ContextType.ON_CONDITION),
+            ]:
+                if kw in remaining.upper():
+                    kw_pos = remaining.upper().rfind(kw)
+                    after_kw = remaining[kw_pos + len(kw):].strip()
+                    if not after_kw or not self._looks_like_complete_clause(
+                        after_kw, kw
+                    ):
+                        return ctx
+
+            # Default: we're in FROM clause listing tables
+            return ContextType.FROM_TABLES
         
         if initial_ctx == ContextType.INSERT_TABLE:
             # Check if we're past the table name into columns
@@ -422,8 +428,6 @@ class SQLContextAnalyzer:
         if len(words) >= 1:
             # Check if ends with operator or incomplete
             last_char = text[-1] if text else ''
-            if last_char in '=<>!,(':
-                return False
-            return True
-        
+            return last_char not in '=<>!,('
+
         return False

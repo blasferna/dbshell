@@ -86,7 +86,19 @@ class WordCompleter:
 
     def update_schema(self) -> None:
         """Reload schema objects from the database connection."""
-        self._schema_completions = self._build_schema_completions()
+        self.set_schema(self.build_schema_completions())
+
+    def build_schema_completions(self) -> list[Completion]:
+        """Fetch tables/columns from the database and build completions.
+
+        Safe to call from a worker thread; install the result with
+        ``set_schema`` afterwards.
+        """
+        return self._build_schema_completions()
+
+    def set_schema(self, completions: list[Completion]) -> None:
+        """Install pre-built schema completions."""
+        self._schema_completions = completions
         self._rebuild_completions()
 
     def clear_schema(self) -> None:

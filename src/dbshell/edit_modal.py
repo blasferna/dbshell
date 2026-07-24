@@ -21,11 +21,6 @@ def _format_value_for_input(value: object) -> str:
     return str(value)
 
 
-def _format_sql_literal(value: str) -> str:
-    """Escape and quote a string value for safe inclusion in a SQL literal."""
-    return "'" + value.replace("\\", "\\\\").replace("'", "''") + "'"
-
-
 class RecordEditModal(ModalScreen[bool | None]):
     """Edit a single record by mutating one Input per column.
 
@@ -290,10 +285,12 @@ class RecordEditModal(ModalScreen[bool | None]):
             zip(self.columns, self.values, strict=False)
         )
 
-        # Build the UPDATE statement: NULL is decided by the checkbox, and
-        # the input content is used as-is otherwise (so an empty string
+        # Build a parameterized UPDATE: NULL is decided by the checkbox, and
+        # the input content is bound as-is otherwise (so an empty string
         # stays an empty string, distinct from NULL).
+        placeholder = self.adapter.param_placeholder
         assignments: list[str] = []
+        params: list[object] = []
         for column, input_widget in self._inputs.items():
             null_box = self._null_boxes.get(column)
             is_null = null_box.value if null_box is not None else False
@@ -303,7 +300,8 @@ class RecordEditModal(ModalScreen[bool | None]):
                 new_values[column] = None
             else:
                 raw = input_widget.value
-                assignments.append(f"{quoted_col} = {_format_sql_literal(raw)}")
+                assignments.append(f"{quoted_col} = {placeholder}")
+                params.append(raw)
                 new_values[column] = raw
 
         where_parts: list[str] = []
@@ -316,9 +314,8 @@ class RecordEditModal(ModalScreen[bool | None]):
                     success=False,
                 )
                 return
-            where_parts.append(
-                f"{quoted_pk} = {_format_sql_literal(str(original))}"
-            )
+            where_parts.append(f"{quoted_pk} = {placeholder}")
+            params.append(original)
 
         quoted_table = self.adapter.quote_identifier(self.table)
         sql = (
@@ -327,7 +324,7 @@ class RecordEditModal(ModalScreen[bool | None]):
         )
 
         # Execute via the adapter so behaviour matches the manual F8 path.
-        success, message, _, _ = self.adapter.execute_query(sql)
+        success, message, _, _ = self.adapter.execute_query(sql, params)
         if not success:
             self._show_status(message, success=False)
             return

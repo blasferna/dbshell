@@ -1,6 +1,8 @@
 import argparse
+import asyncio
 import json
 import sys
+import time
 from pathlib import Path
 
 import clipboard
@@ -12,6 +14,7 @@ from textual.widgets import (
     Button,
     DataTable,
     Footer,
+    Select,
 )
 from textual_textarea import TextEditor
 from textual_textarea.messages import TextAreaClipboardError
@@ -28,7 +31,11 @@ from dbshell.exporters import (
     to_markdown,
     to_tsv,
 )
-from dbshell.sql_utils import extract_source_table
+from dbshell.sql_utils import (
+    apply_row_limit,
+    extract_source_table,
+    split_statements,
+)
 from dbshell.suggestions import MemberCompleter, WordCompleter
 from dbshell.suggestions.completers import SEPARATOR_PROG
 from dbshell.suggestions.context import SQLContextAnalyzer
@@ -213,7 +220,7 @@ class DBShellApp(App, inherit_bindings=False):
     .button-group {
         layout: horizontal;
         align: right middle;
-        width: 70%;
+        width: 1fr;
     }
     
     .action-panel {
@@ -233,13 +240,30 @@ class DBShellApp(App, inherit_bindings=False):
     .select-database-container {
         layout: horizontal;
         align: left middle;
-        width: 30%;
+        width: auto;
         margin-left: 1;
     }
     
     #database_selector {
         width: auto;
         min-width: 30;
+    }
+
+    #row_limit_select {
+        width: 15;
+        margin: 0 1;
+    }
+
+    /* Record navigation only works in vertical view; hidden otherwise. */
+    #prev_record_btn, #next_record_btn {
+        display: none;
+        margin: 0;
+    }
+
+    /* Fixed width fitting both labels: Button doesn't re-layout its
+       auto width when the label changes at runtime. */
+    #toggle_view_btn {
+        width: 12;
     }
     
     .results-panel {
@@ -326,9 +350,29 @@ class DBShellApp(App, inherit_bindings=False):
         self.selected_record_index = None
         self.last_select_query: str | None = None
         self.source_table: str | None = None
+        self._query_running = False
         self.title = "Dbshell"
         self.word_completer = WordCompleter(self.adapter)
         self.member_completer = MemberCompleter(self.adapter)
+
+    ROW_LIMIT_PRESETS = (100, 500, 1000, 5000, 10000)
+
+    def _row_limit_options(self) -> list[tuple[str, int]]:
+        """Build the row-limit choices, including the current adapter value."""
+        values = set(self.ROW_LIMIT_PRESETS)
+        if self.adapter.max_rows:
+            values.add(self.adapter.max_rows)
+        options = [(f"LIMIT {value}", value) for value in sorted(values)]
+        options.append(("No LIMIT", 0))
+        return options
+
+    @on(Select.Changed, "#row_limit_select")
+    def on_row_limit_changed(self, event: Select.Changed) -> None:
+        """Apply the selected SELECT row limit (0 means no LIMIT)."""
+        if event.value is Select.BLANK:
+            return
+        # 0 = "No LIMIT" in the dropdown; adapters treat None as uncapped.
+        self.adapter.max_rows = int(event.value) or None
 
     def compose(self) -> ComposeResult:
         """Create the main modern application layout."""
@@ -345,8 +389,15 @@ class DBShellApp(App, inherit_bindings=False):
                         variant="default",
                     )
                 with Horizontal(classes="button-group"):
+                    yield Select(
+                        self._row_limit_options(),
+                        value=self.adapter.max_rows or 0,
+                        allow_blank=False,
+                        compact=True,
+                        id="row_limit_select",
+                    )
                     yield Button(
-                        "◀ Previous",
+                        "◀ Prev",
                         id="prev_record_btn",
                         variant="default",
                         disabled=True,
@@ -364,7 +415,7 @@ class DBShellApp(App, inherit_bindings=False):
                         disabled=True,
                     )
                     yield Button(
-                        "Vertical View",
+                        "Vertical",
                         id="toggle_view_btn",
                         variant="default",
                     )
@@ -407,13 +458,19 @@ class DBShellApp(App, inherit_bindings=False):
         # If we have a current database, show it and load schema completions
         if self.adapter.database:
             database_selector.label = self.adapter.database
-            self.word_completer.update_schema()
-            self.member_completer.update_schema()
+            await self._refresh_schema_completions()
         else:
             database_selector.label = "Select Database"
             self.word_completer.clear_schema()
             self.member_completer.clear_schema()
 
+    async def _refresh_schema_completions(self) -> None:
+        """Load table/column completions in a thread so the UI stays responsive."""
+        completions = await asyncio.to_thread(
+            self.word_completer.build_schema_completions
+        )
+        self.word_completer.set_schema(completions)
+        self.member_completer.set_schema(list(completions))
 
     @on(TextAreaClipboardError)
     def on_text_area_clipboard_error(self) -> None:
@@ -432,10 +489,6 @@ class DBShellApp(App, inherit_bindings=False):
     def get_current_editor(self) -> QueryEditor:
         """Get the query editor."""
         return self.query_one("#query_editor", QueryEditor)
-
-    def update_results_info(self, message: str) -> None:
-        """Update results info silently."""
-        pass
 
     @on(Button.Pressed, "#run_btn")
     async def execute_query_button(self) -> None:
@@ -478,14 +531,20 @@ class DBShellApp(App, inherit_bindings=False):
         """Handle f8 keyboard shortcut."""
         await self.execute_query()
 
+    def _update_nav_buttons_visibility(self) -> None:
+        """Show Previous/Next only in vertical view, where they work."""
+        for button_id in ("#prev_record_btn", "#next_record_btn"):
+            self.query_one(button_id, Button).display = self.is_vertical_view
+
     async def action_toggle_view(self) -> None:
         """Handle Ctrl+V keyboard shortcut to toggle view."""
         self.is_vertical_view = not self.is_vertical_view
+        self._update_nav_buttons_visibility()
 
         # Update button text
         toggle_btn = self.query_one("#toggle_view_btn", Button)
         if self.is_vertical_view:
-            toggle_btn.label = "Horizontal View"
+            toggle_btn.label = "Horizontal"
             # When switching to vertical view, use the selected record if available
             if self.selected_record_index is not None and self.current_rows:
                 self.current_record_index = self.selected_record_index
@@ -493,7 +552,7 @@ class DBShellApp(App, inherit_bindings=False):
                 # If no record was selected, show the first one
                 self.current_record_index = 0
         else:
-            toggle_btn.label = "Vertical View"
+            toggle_btn.label = "Vertical"
 
         # Refresh the table with current data if available
         if self.current_columns and self.current_rows:
@@ -521,28 +580,33 @@ class DBShellApp(App, inherit_bindings=False):
             self.notify("No database connection", severity="error")
             return
 
-        success, message = self.adapter.change_database(database)
+        success, message = await asyncio.to_thread(
+            self.adapter.change_database, database
+        )
         if success:
             self.notify(message, severity="information")
             # Update the database selector button
             database_selector = self.query_one("#database_selector", Button)
             database_selector.label = database
             # Refresh autocomplete schema for the new database
-            self.word_completer.update_schema()
-            self.member_completer.update_schema()
+            await self._refresh_schema_completions()
             # Clear current results when changing database
-            self.current_columns = []
-            self.current_rows = []
-            self.current_record_index = 0
-            self.selected_record_index = None
-            self.last_select_query = None
-            self.source_table = None
-            results_table = self.query_one("#results_table", DataTable)
-            results_table.clear(columns=True)
+            self._clear_results()
             await self._update_edit_button_state()
             await self._update_export_button_state()
         else:
             self.notify(message, severity="error")
+
+    def _clear_results(self) -> None:
+        """Reset stored result state and empty the results table."""
+        self.current_columns = []
+        self.current_rows = []
+        self.current_record_index = 0
+        self.selected_record_index = None
+        self.last_select_query = None
+        self.source_table = None
+        results_table = self.query_one("#results_table", DataTable)
+        results_table.clear(columns=True)
 
     async def action_show_explorer(self) -> None:
         """Handle Ctrl+E keyboard shortcut to show database explorer."""
@@ -576,8 +640,10 @@ class DBShellApp(App, inherit_bindings=False):
         quoted = self.adapter.quote_identifier(obj_name)
 
         if action == ObjectAction.VIEW_DATA:
-            sql = f"SELECT * FROM {quoted};"
-            self._replace_editor_text(sql)
+            sql = f"SELECT * FROM {quoted}"
+            if self.adapter.max_rows:
+                sql = f"{sql} LIMIT {self.adapter.max_rows}"
+            self._replace_editor_text(f"{sql};")
             return
 
         if action in (
@@ -747,8 +813,8 @@ class DBShellApp(App, inherit_bindings=False):
         if not self.last_select_query:
             return
 
-        success, message, columns, rows = self.adapter.execute_query(
-            self.last_select_query
+        success, message, columns, rows = await asyncio.to_thread(
+            self.adapter.execute_query, self.last_select_query
         )
         if not success:
             self.notify(f"Refresh failed: {message}", severity="error")
@@ -870,87 +936,136 @@ class DBShellApp(App, inherit_bindings=False):
             self.notify(f"Exported {row_count} row(s) as {fmt} to {path}")
 
     async def execute_query(self) -> None:
-        """Execute the SQL query from the current editor."""
+        """Execute the SQL from the current editor without blocking the UI."""
         if not self.connected:
             self.notify("No database connection", severity="error")
             return
 
-        # Check if a database is selected (unless it's a query that doesn't require one)
+        if self._query_running:
+            self.notify("A query is already running", severity="warning")
+            return
+
         current_editor = self.get_current_editor()
         query = current_editor.selected_text or current_editor.text
-        query_upper = query.strip().upper()
+        statements = split_statements(query)
+        if not statements:
+            return
 
-        # These queries don't require a database to be selected
-        database_independent_queries = [
+        # These queries don't require a database to be selected.
+        database_independent_queries = (
             "SHOW DATABASES",
             "CREATE DATABASE",
             "DROP DATABASE",
-        ]
-        requires_database = not any(
-            query_upper.startswith(cmd) for cmd in database_independent_queries
+        )
+        requires_database = not all(
+            statement.upper().startswith(database_independent_queries)
+            for statement in statements
         )
 
         if requires_database and not self.adapter.database:
             self.notify("Please select a database first", severity="error")
             return
 
-        if not query.strip():
-            return
+        run_btn = self.query_one("#run_btn", Button)
+        results_viewer = self.query_one(ResultViewer)
+        self._query_running = True
+        run_btn.disabled = True
+        results_viewer.border_title = "Results — running…"
 
-        # Execute query
-        success, message, columns, rows = self.adapter.execute_query(query)
+        last_columns: list | None = None
+        last_rows: list | None = None
+        last_result_statement: str | None = None
+        last_truncated = False
+        last_message = ""
+        error_message: str | None = None
+        ran_database_statement = False
+        start = time.monotonic()
 
-        if success:
-            # Update results table if we have data
-            if columns and rows is not None:
-                # Store current data for view toggling
-                self.current_columns = columns
-                self.current_rows = rows
-                self.current_record_index = 0
-                self.selected_record_index = None
-                # Track the last successful SELECT and its source table so
-                # the Edit Record action can build an UPDATE statement.
-                self.last_select_query = query
-                self.source_table = extract_source_table(query)
-                # Reset to horizontal view for new queries
-                self.is_vertical_view = False
-                toggle_btn = self.query_one("#toggle_view_btn", Button)
-                toggle_btn.label = "Vertical View"
-                await self.update_results_table(columns, rows)
-            else:
-                # Clear stored data and table for non-SELECT queries
-                self.current_columns = []
-                self.current_rows = []
-                self.current_record_index = 0
-                self.selected_record_index = None
-                self.last_select_query = None
-                self.source_table = None
-                results_table = self.query_one("#results_table", DataTable)
-                results_table.clear(columns=True)
+        try:
+            for index, statement in enumerate(statements):
+                # Apply the UI/CLI row limit as a SELECT LIMIT when the
+                # statement does not already have one. The editor text is
+                # left untouched; only the statement sent to the DB changes.
+                executable = apply_row_limit(statement, self.adapter.max_rows)
+                success, message, columns, rows = await asyncio.to_thread(
+                    self.adapter.execute_query, executable
+                )
+                if not success:
+                    error_message = message
+                    if len(statements) > 1:
+                        error_message = (
+                            f"Statement {index + 1} of {len(statements)} "
+                            f"failed: {message}"
+                        )
+                    break
 
-                # Check if this was a database-related query and refresh the
-                # database list.
-                query_upper = query.strip().upper()
-                if any(
-                    cmd in query_upper for cmd in ["CREATE DATABASE", "DROP DATABASE"]
+                last_message = message
+                if columns and rows is not None:
+                    last_columns = columns
+                    last_rows = rows
+                    # Keep the executed form (with LIMIT) so Edit Record
+                    # refresh uses the same capped query.
+                    last_result_statement = executable
+                    last_truncated = self.adapter.last_result_truncated
+
+                statement_upper = statement.upper()
+                if "CREATE DATABASE" in statement_upper or (
+                    "DROP DATABASE" in statement_upper
                 ):
-                    await self.refresh_database()
-            results_viewer = self.query_one("ResultViewer")
-            results_viewer.border_title = f"Results ({len(rows) if rows else 0} rows)"
+                    ran_database_statement = True
+        finally:
+            self._query_running = False
+            run_btn.disabled = False
 
-        else:
-            self.notify(message, severity="error")
-            # Clear stored data and table on error
-            self.current_columns = []
-            self.current_rows = []
+        elapsed = time.monotonic() - start
+
+        if error_message is not None:
+            self.notify(error_message, severity="error")
+            self._clear_results()
+            results_viewer.border_title = "Results"
+        elif last_columns and last_rows is not None:
+            # Store current data for view toggling
+            self.current_columns = last_columns
+            self.current_rows = last_rows
             self.current_record_index = 0
             self.selected_record_index = None
-            self.last_select_query = None
-            self.source_table = None
-            results_table = self.query_one("#results_table", DataTable)
-            results_table.clear(columns=True)
+            # Track the last statement that produced results and its source
+            # table so the Edit Record action can build an UPDATE statement.
+            self.last_select_query = last_result_statement
+            self.source_table = extract_source_table(last_result_statement)
+            # Reset to horizontal view for new queries
+            self.is_vertical_view = False
+            self._update_nav_buttons_visibility()
+            toggle_btn = self.query_one("#toggle_view_btn", Button)
+            toggle_btn.label = "Vertical"
+            await self.update_results_table(last_columns, last_rows)
+
+            row_count = len(last_rows)
+            if last_truncated:
+                results_viewer.border_title = (
+                    f"Results (first {row_count} rows, truncated — {elapsed:.2f}s)"
+                )
+                self.notify(
+                    f"Result truncated to the first {row_count} rows",
+                    severity="warning",
+                )
+            else:
+                results_viewer.border_title = (
+                    f"Results ({row_count} rows in {elapsed:.2f}s)"
+                )
+        else:
+            # No result set: clear the table and report what happened.
+            self._clear_results()
+            if ran_database_statement:
+                await self.refresh_database()
+            results_viewer.border_title = f"Results (0 rows in {elapsed:.2f}s)"
+            summary = last_message or "Query executed."
+            if len(statements) > 1:
+                summary = f"Executed {len(statements)} statements. {summary}"
+            self.notify(summary)
 
         await self._update_edit_button_state()
+        await self._update_export_button_state()
 
     async def update_results_table(self, columns: list[str], rows: list[tuple]) -> None:
         """Update the results table with query results."""
@@ -1126,6 +1241,17 @@ Examples:
         help="Disable SSL for MySQL",
     )
 
+    parser.add_argument(
+        "--max-rows",
+        type=int,
+        default=1000,
+        help=(
+            "Maximum number of rows fetched per query "
+            "(default: 1000, 0 disables the limit; "
+            "can also be changed from the UI)"
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.database_file:
@@ -1161,6 +1287,7 @@ def main():
                 "sqlite",
                 {
                     "database": args.database_file,
+                    "max_rows": args.max_rows,
                 },
             )
         else:
@@ -1173,6 +1300,7 @@ def main():
                     "database": args.database,
                     "port": args.port,
                     "ssl_disabled": args.ssl_disabled,
+                    "max_rows": args.max_rows,
                 },
             )
         
