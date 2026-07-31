@@ -1,9 +1,10 @@
 """Smoke tests for the Textual application against an in-memory SQLite DB."""
 
-from textual.widgets import DataTable, Select
+from textual.widgets import Button, DataTable, Input, Select
 
 from dbshell import DBShellApp, ResultViewer
 from dbshell.database import DatabaseFactory
+from dbshell.explorer import ObjectAction
 
 
 def make_app(**params) -> DBShellApp:
@@ -136,3 +137,91 @@ async def test_failing_statement_clears_results():
         assert app.current_rows == []
         table = app.query_one("#results_table", DataTable)
         assert table.row_count == 0
+
+
+async def test_add_record_button_enabled_without_rows():
+    app = make_app()
+    async with app.run_test() as pilot:
+        editor = app.get_current_editor()
+        editor.text = (
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT);\nSELECT * FROM t;"
+        )
+        await app.execute_query()
+        await pilot.pause()
+
+        # An empty table still has a known source table, so adding is fine
+        # even though there is nothing to edit yet.
+        assert app.current_rows == []
+        assert app.source_table == "t"
+
+        add_btn = app.query_one("#add_record_btn", Button)
+        edit_btn = app.query_one("#edit_record_btn", Button)
+        assert add_btn.disabled is False
+        assert edit_btn.disabled is True
+
+
+async def test_add_record_inserts_row_via_modal():
+    app = make_app()
+    async with app.run_test() as pilot:
+        editor = app.get_current_editor()
+        editor.text = (
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT);\nSELECT * FROM t;"
+        )
+        await app.execute_query()
+        await pilot.pause()
+        assert app.current_rows == []
+
+        await app.action_add_record()
+        await pilot.pause()
+
+        modal = app.screen
+        name_input = modal.query_one("#input_name", Input)
+        name_input.value = "alpha"
+
+        modal.action_save()
+        await pilot.pause()
+        await pilot.pause()
+
+        assert app.current_rows == [(1, "alpha")]
+        assert app.current_record_index == 0
+
+        add_btn = app.query_one("#add_record_btn", Button)
+        edit_btn = app.query_one("#edit_record_btn", Button)
+        assert add_btn.disabled is False
+        assert edit_btn.disabled is False
+
+
+async def test_add_record_from_explorer_leaves_other_results_untouched():
+    app = make_app()
+    async with app.run_test() as pilot:
+        editor = app.get_current_editor()
+        editor.text = (
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT);\n"
+            "CREATE TABLE other (id INTEGER PRIMARY KEY, label TEXT);\n"
+            "INSERT INTO other (label) VALUES ('keep');\n"
+            "SELECT * FROM other;"
+        )
+        await app.execute_query()
+        await pilot.pause()
+        assert app.source_table == "other"
+        previous_rows = app.current_rows
+
+        # Trigger the Explorer's "Add Record" action for a *different* table.
+        await app._handle_object_action("t", "tables", ObjectAction.ADD_RECORD)
+        await pilot.pause()
+
+        modal = app.screen
+        name_input = modal.query_one("#input_name", Input)
+        name_input.value = "beta"
+        modal.action_save()
+        await pilot.pause()
+        await pilot.pause()
+
+        # The currently-loaded results (a different table) are untouched.
+        assert app.current_rows == previous_rows
+        assert app.source_table == "other"
+
+        # But the row really was inserted into "t".
+        success, _, _, rows = app.adapter.execute_query("SELECT name FROM t")
+        assert success
+        assert rows == [("beta",)]

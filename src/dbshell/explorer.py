@@ -28,6 +28,7 @@ class ObjectAction(Enum):
     """Actions available for a database object."""
 
     VIEW_DATA = "View Data"
+    ADD_RECORD = "Add Record"
     INSERT_TEMPLATE = "Insert Template"
     UPDATE_TEMPLATE = "Update Template"
     DELETE_TEMPLATE = "Delete Template"
@@ -48,6 +49,7 @@ def get_available_actions(obj_type: str) -> list[ObjectAction]:
     if obj_type == "tables":
         return [
             ObjectAction.VIEW_DATA,
+            ObjectAction.ADD_RECORD,
             ObjectAction.INSERT_TEMPLATE,
             ObjectAction.UPDATE_TEMPLATE,
             ObjectAction.DELETE_TEMPLATE,

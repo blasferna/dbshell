@@ -1,4 +1,4 @@
-"""Modal screen for editing a single database record."""
+"""Modal screen for editing an existing record or adding a new one."""
 
 from __future__ import annotations
 
@@ -22,14 +22,19 @@ def _format_value_for_input(value: object) -> str:
 
 
 class RecordEditModal(ModalScreen[bool | None]):
-    """Edit a single record by mutating one Input per column.
+    """Edit an existing record, or add a new one, one Input per column.
 
-    Each non-key column has an Input plus a "NULL" Checkbox so the user
+    Each editable column has an Input plus a "NULL" Checkbox so the user
     can explicitly choose to write the value as ``NULL`` (the input is
-    disabled while the box is checked). Primary key columns are shown as
-    read-only and used to build the ``WHERE`` clause. Returns ``True``
-    on a successful UPDATE, ``False`` if the user cancelled, or ``None``
-    if the modal was dismissed without an explicit choice.
+    disabled while the box is checked). In edit mode (the default),
+    primary key columns are shown read-only and used to build the
+    ``WHERE`` clause of an ``UPDATE``. In add mode (``is_new=True``),
+    every column - including primary keys - is editable, and the form
+    builds an ``INSERT`` instead; primary-key columns start with NULL
+    ticked so auto-increment columns can generate their own value.
+    Returns ``True`` on a successful save, ``False`` if the user
+    cancelled, or ``None`` if the modal was dismissed without an
+    explicit choice.
     """
 
     DEFAULT_CSS = """
@@ -150,6 +155,8 @@ class RecordEditModal(ModalScreen[bool | None]):
         columns: list[str],
         values: list[object],
         primary_keys: list[str],
+        *,
+        is_new: bool = False,
     ) -> None:
         super().__init__()
         self.adapter = adapter
@@ -157,6 +164,7 @@ class RecordEditModal(ModalScreen[bool | None]):
         self.columns = columns
         self.values = values
         self.primary_keys = primary_keys
+        self.is_new = is_new
 
         self._inputs: dict[str, Input] = {}
         self._null_boxes: dict[str, Checkbox] = {}
@@ -167,31 +175,42 @@ class RecordEditModal(ModalScreen[bool | None]):
     def compose(self) -> ComposeResult:
         with Vertical(classes="edit-dialog"):
             quoted = self.adapter.quote_identifier(self.table)
-            yield Static(f"Edit record — {quoted}", classes="edit-title")
-            yield Static(
-                "Tick NULL to clear a field; leave unticked to set a value "
-                "(empty string is a valid value).",
-                classes="edit-subtitle",
-            )
+            title = "Add record" if self.is_new else "Edit record"
+            yield Static(f"{title} — {quoted}", classes="edit-title")
+            if self.is_new:
+                subtitle = (
+                    "Tick NULL to use the column's default or auto-increment; "
+                    "leave unticked to set a value (empty string is a valid "
+                    "value)."
+                )
+            else:
+                subtitle = (
+                    "Tick NULL to clear a field; leave unticked to set a value "
+                    "(empty string is a valid value)."
+                )
+            yield Static(subtitle, classes="edit-subtitle")
 
             with VerticalScroll(classes="edit-form"):
                 for column, value in zip(self.columns, self.values, strict=False):
                     with Horizontal(classes="field-row"):
-                        if column in self.primary_keys:
-                            label = f"[bold]{column}[/bold] [dim](PK)[/dim]"
-                            label_widget = Static(label, classes="field-label")
-                            self._labels.append(label_widget)
-                            yield label_widget
+                        is_pk = column in self.primary_keys
+                        label = (
+                            f"[bold]{column}[/bold] [dim](PK)[/dim]"
+                            if is_pk
+                            else column
+                        )
+                        label_widget = Static(label, classes="field-label")
+                        self._labels.append(label_widget)
+                        yield label_widget
+
+                        if is_pk and not self.is_new:
                             yield Static(
                                 _format_value_for_input(value) or "[dim]NULL[/dim]",
                                 classes="field-readonly",
                             )
                             self._read_only[column] = _format_value_for_input(value)
                         else:
-                            label_widget = Static(column, classes="field-label")
-                            self._labels.append(label_widget)
-                            yield label_widget
-                            is_null = value is None
+                            is_null = is_pk if self.is_new else value is None
                             input_widget = Input(
                                 value="" if is_null else _format_value_for_input(value),
                                 id=f"input_{column}",
@@ -219,7 +238,8 @@ class RecordEditModal(ModalScreen[bool | None]):
 
             with Horizontal(classes="button-row"):
                 yield Button("Cancel", id="edit_cancel_btn", variant="default")
-                yield Button("Save", id="edit_save_btn", variant="primary")
+                save_label = "Insert" if self.is_new else "Save"
+                yield Button(save_label, id="edit_save_btn", variant="primary")
 
     def on_mount(self) -> None:
         """Focus the first editable input and align all field labels."""
@@ -265,12 +285,12 @@ class RecordEditModal(ModalScreen[bool | None]):
         self.dismiss(False)
 
     def action_save(self) -> None:
-        """Validate the form and execute the UPDATE."""
+        """Validate the form and execute the INSERT or UPDATE."""
         if not self._inputs:
             self._show_status("No editable fields.", success=False)
             return
 
-        if not self.primary_keys:
+        if not self.is_new and not self.primary_keys:
             self._show_status(
                 "Cannot edit: no primary key on this table.", success=False
             )
@@ -280,6 +300,12 @@ class RecordEditModal(ModalScreen[bool | None]):
             self._status_widget.update("")
             self._status_widget.set_class(False, "success")
 
+        placeholder = self.adapter.param_placeholder
+
+        if self.is_new:
+            self._save_insert(placeholder)
+            return
+
         # Read edited values (use original for PKs).
         new_values: dict[str, object] = dict(
             zip(self.columns, self.values, strict=False)
@@ -288,7 +314,6 @@ class RecordEditModal(ModalScreen[bool | None]):
         # Build a parameterized UPDATE: NULL is decided by the checkbox, and
         # the input content is bound as-is otherwise (so an empty string
         # stays an empty string, distinct from NULL).
-        placeholder = self.adapter.param_placeholder
         assignments: list[str] = []
         params: list[object] = []
         for column, input_widget in self._inputs.items():
@@ -330,6 +355,31 @@ class RecordEditModal(ModalScreen[bool | None]):
             return
 
         self._show_status("Row updated successfully.", success=True)
+        self.dismiss(True)
+
+    def _save_insert(self, placeholder: str) -> None:
+        """Build and execute a parameterized INSERT from the form inputs."""
+        quoted_columns: list[str] = []
+        params: list[object] = []
+        for column, input_widget in self._inputs.items():
+            null_box = self._null_boxes.get(column)
+            is_null = null_box.value if null_box is not None else False
+            quoted_columns.append(self.adapter.quote_identifier(column))
+            params.append(None if is_null else input_widget.value)
+
+        quoted_table = self.adapter.quote_identifier(self.table)
+        placeholders = ", ".join([placeholder] * len(quoted_columns))
+        sql = (
+            f"INSERT INTO {quoted_table} ({', '.join(quoted_columns)}) "
+            f"VALUES ({placeholders});"
+        )
+
+        success, message, _, _ = self.adapter.execute_query(sql, params)
+        if not success:
+            self._show_status(message, success=False)
+            return
+
+        self._show_status("Row inserted successfully.", success=True)
         self.dismiss(True)
 
     def _show_status(self, text: str, *, success: bool) -> None:

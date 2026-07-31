@@ -331,6 +331,7 @@ class DBShellApp(App, inherit_bindings=False):
         ("ctrl+e", "show_explorer", "Database Explorer"),
         ("ctrl+d", "select_database", "Select Database"),
         ("ctrl+u", "edit_record", "Edit Record"),
+        ("ctrl+n", "add_record", "Add Record"),
         ("ctrl+j", "copy_row_json", "Copy Row as JSON"),
         ("ctrl+shift+e", "export_data", "Export Data"),
         ("ctrl+q", "quit", "Quit"),
@@ -411,6 +412,12 @@ class DBShellApp(App, inherit_bindings=False):
                     yield Button(
                         "Edit Record",
                         id="edit_record_btn",
+                        variant="default",
+                        disabled=True,
+                    )
+                    yield Button(
+                        "Add Record",
+                        id="add_record_btn",
                         variant="default",
                         disabled=True,
                     )
@@ -515,6 +522,11 @@ class DBShellApp(App, inherit_bindings=False):
         """Handle edit record button press."""
         await self.action_edit_record()
 
+    @on(Button.Pressed, "#add_record_btn")
+    async def add_record_button(self) -> None:
+        """Handle add record button press."""
+        await self.action_add_record()
+
     @on(Button.Pressed, "#export_btn")
     async def export_button(self) -> None:
         """Handle export button press."""
@@ -593,6 +605,7 @@ class DBShellApp(App, inherit_bindings=False):
             # Clear current results when changing database
             self._clear_results()
             await self._update_edit_button_state()
+            await self._update_add_button_state()
             await self._update_export_button_state()
         else:
             self.notify(message, severity="error")
@@ -644,6 +657,10 @@ class DBShellApp(App, inherit_bindings=False):
             if self.adapter.max_rows:
                 sql = f"{sql} LIMIT {self.adapter.max_rows}"
             self._replace_editor_text(f"{sql};")
+            return
+
+        if action == ObjectAction.ADD_RECORD:
+            await self._open_add_record_modal(obj_name)
             return
 
         if action in (
@@ -751,6 +768,18 @@ class DBShellApp(App, inherit_bindings=False):
             return
         edit_btn.disabled = self.source_table is None or not self.current_rows
 
+    async def _update_add_button_state(self) -> None:
+        """Enable the Add Record button whenever a source table is known.
+
+        Unlike editing, adding a row does not require any existing rows -
+        an empty table is a perfectly valid target for a new record.
+        """
+        try:
+            add_btn = self.query_one("#add_record_btn", Button)
+        except Exception:
+            return
+        add_btn.disabled = self.source_table is None
+
     async def _update_export_button_state(self) -> None:
         """Enable the Export button only when there are results."""
         try:
@@ -835,6 +864,87 @@ class DBShellApp(App, inherit_bindings=False):
 
         results_viewer = self.query_one("ResultViewer")
         results_viewer.border_title = f"Results ({len(rows) if rows else 0} rows)"
+
+    async def action_add_record(self) -> None:
+        """Open the add-record modal for the current source table (Ctrl+N)."""
+        if not self.connected:
+            self.notify("No database connection", severity="error")
+            return
+
+        if not self.source_table:
+            self.notify(
+                "Run a SELECT first (or use the Explorer) to choose a table",
+                severity="warning",
+            )
+            return
+
+        await self._open_add_record_modal(self.source_table)
+
+    async def _open_add_record_modal(self, table: str) -> None:
+        """Open a blank RecordEditModal to insert a new row into ``table``."""
+        if not self.connected:
+            self.notify("No database connection", severity="error")
+            return
+
+        success, message, columns = self.adapter.get_object_columns_detailed(table)
+        if not success or not columns:
+            self.notify(f"Cannot add record: {message}", severity="error")
+            return
+
+        ok, _, primary_keys = self.adapter.get_primary_keys(table)
+        if not ok or primary_keys is None:
+            # Non-fatal: PK info is only a display/default hint when adding.
+            primary_keys = []
+
+        column_names = [c[0] for c in columns]
+        modal = RecordEditModal(
+            self.adapter,
+            table,
+            column_names,
+            [None] * len(column_names),
+            primary_keys,
+            is_new=True,
+        )
+
+        def _on_close(result: bool | None) -> None:
+            if result is True:
+                if table == self.source_table:
+                    self.call_later(self._refresh_after_add)
+                else:
+                    self.notify(f"Row inserted into '{table}'")
+
+        self.push_screen(modal, _on_close)
+
+    async def _refresh_after_add(self) -> None:
+        """Re-run the last SELECT after an insert and jump to the new row."""
+        if not self.last_select_query:
+            return
+
+        success, message, columns, rows = await asyncio.to_thread(
+            self.adapter.execute_query, self.last_select_query
+        )
+        if not success:
+            self.notify(f"Refresh failed: {message}", severity="error")
+            return
+
+        if columns and rows is not None:
+            self.current_columns = columns
+            self.current_rows = rows
+            # A newly inserted row is expected to land at the end.
+            if rows:
+                self.current_record_index = len(rows) - 1
+                self.selected_record_index = self.current_record_index
+            else:
+                self.current_record_index = 0
+                self.selected_record_index = None
+            await self.update_results_table(columns, rows)
+            self.notify("Row inserted", severity="information")
+
+        results_viewer = self.query_one("ResultViewer")
+        results_viewer.border_title = f"Results ({len(rows) if rows else 0} rows)"
+        # Row count changed (e.g. 0 -> 1), so Edit/Add availability can too.
+        await self._update_edit_button_state()
+        await self._update_add_button_state()
 
     async def action_copy_row_json(self) -> None:
         """Copy the currently active row as a JSON object to the clipboard."""
@@ -1065,6 +1175,7 @@ class DBShellApp(App, inherit_bindings=False):
             self.notify(summary)
 
         await self._update_edit_button_state()
+        await self._update_add_button_state()
         await self._update_export_button_state()
 
     async def update_results_table(self, columns: list[str], rows: list[tuple]) -> None:
