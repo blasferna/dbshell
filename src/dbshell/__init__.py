@@ -406,9 +406,9 @@ class DBShellApp(App, inherit_bindings=False):
         ("ctrl+t", "toggle_view", "Toggle View"),
         ("ctrl+e", "show_explorer", "Database Explorer"),
         ("ctrl+d", "select_database", "Select Database"),
-        ("ctrl+u", "edit_record", "Edit Record"),
-        ("ctrl+n", "add_record", "Add Record"),
-        ("ctrl+shift+d", "delete_record", "Delete Record"),
+        ("ctrl+u", "edit_record", "Edit"),
+        ("ctrl+n", "add_record", "Add"),
+        ("ctrl+shift+d", "delete_record", "Delete"),
         ("ctrl+j", "copy_row_json", "Copy Row as JSON"),
         ("ctrl+shift+e", "export_data", "Export Data"),
         ("ctrl+q", "quit", "Quit"),
@@ -487,19 +487,19 @@ class DBShellApp(App, inherit_bindings=False):
                         disabled=True,
                     )
                     yield Button(
-                        "Edit Record",
+                        "Edit",
                         id="edit_record_btn",
                         variant="default",
                         disabled=True,
                     )
                     yield Button(
-                        "Add Record",
+                        "Add",
                         id="add_record_btn",
                         variant="default",
                         disabled=True,
                     )
                     yield Button(
-                        "Delete Record",
+                        "Delete",
                         id="delete_record_btn",
                         variant="error",
                         disabled=True,
@@ -850,7 +850,7 @@ class DBShellApp(App, inherit_bindings=False):
         return None
 
     async def _update_edit_button_state(self) -> None:
-        """Enable the Edit Record button only when editing is possible."""
+        """Enable the Edit button only when editing is possible."""
         try:
             edit_btn = self.query_one("#edit_record_btn", Button)
         except Exception:
@@ -858,7 +858,7 @@ class DBShellApp(App, inherit_bindings=False):
         edit_btn.disabled = self.source_table is None or not self.current_rows
 
     async def _update_add_button_state(self) -> None:
-        """Enable the Add Record button whenever a source table is known.
+        """Enable the Add button whenever a source table is known.
 
         Unlike editing, adding a row does not require any existing rows -
         an empty table is a perfectly valid target for a new record.
@@ -878,7 +878,7 @@ class DBShellApp(App, inherit_bindings=False):
         export_btn.disabled = not self.current_rows
 
     async def _update_delete_button_state(self) -> None:
-        """Enable the Delete Record button only when deletion is possible."""
+        """Enable the Delete button only when deletion is possible."""
         try:
             delete_btn = self.query_one("#delete_record_btn", Button)
         except Exception:
