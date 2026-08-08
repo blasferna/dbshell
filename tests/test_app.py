@@ -2,7 +2,7 @@
 
 from textual.widgets import Button, DataTable, Input, Select
 
-from dbshell import DBShellApp, ResultViewer
+from dbshell import DBShellApp, DeleteConfirmModal, ResultViewer
 from dbshell.database import DatabaseFactory
 from dbshell.explorer import ObjectAction
 
@@ -225,3 +225,98 @@ async def test_add_record_from_explorer_leaves_other_results_untouched():
         success, _, _, rows = app.adapter.execute_query("SELECT name FROM t")
         assert success
         assert rows == [("beta",)]
+
+
+async def test_delete_record_button_state():
+    app = make_app()
+    async with app.run_test() as pilot:
+        delete_btn = app.query_one("#delete_record_btn", Button)
+        assert delete_btn.disabled is True
+
+        editor = app.get_current_editor()
+        editor.text = (
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT);\n"
+            "INSERT INTO t (name) VALUES ('alpha');\n"
+            "SELECT * FROM t;"
+        )
+        await app.execute_query()
+        await pilot.pause()
+
+        assert delete_btn.disabled is False
+
+
+async def test_delete_record_removes_row():
+    app = make_app()
+    async with app.run_test() as pilot:
+        editor = app.get_current_editor()
+        editor.text = (
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT);\n"
+            "INSERT INTO t (name) VALUES ('alpha');\n"
+            "INSERT INTO t (name) VALUES ('beta');\n"
+            "SELECT * FROM t;"
+        )
+        await app.execute_query()
+        await pilot.pause()
+        assert app.current_rows == [(1, "alpha"), (2, "beta")]
+
+        await app.action_delete_record()
+        await pilot.pause()
+
+        modal = app.screen
+        modal.query_one("#delete_confirm_btn", Button).press()
+        await pilot.pause()
+        await pilot.pause()
+
+        assert app.current_rows == [(2, "beta")]
+
+        success, _, _, rows = app.adapter.execute_query("SELECT * FROM t")
+        assert success
+        assert rows == [(2, "beta")]
+
+
+async def test_delete_record_cancel_keeps_row():
+    app = make_app()
+    async with app.run_test() as pilot:
+        editor = app.get_current_editor()
+        editor.text = (
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT);\n"
+            "INSERT INTO t (name) VALUES ('alpha');\n"
+            "SELECT * FROM t;"
+        )
+        await app.execute_query()
+        await pilot.pause()
+        assert app.current_rows == [(1, "alpha")]
+
+        await app.action_delete_record()
+        await pilot.pause()
+
+        modal = app.screen
+        modal.query_one("#delete_cancel_btn", Button).press()
+        await pilot.pause()
+        await pilot.pause()
+
+        assert app.current_rows == [(1, "alpha")]
+
+        success, _, _, rows = app.adapter.execute_query("SELECT * FROM t")
+        assert success
+        assert rows == [(1, "alpha")]
+
+
+async def test_delete_record_blocked_without_primary_key():
+    app = make_app()
+    async with app.run_test() as pilot:
+        editor = app.get_current_editor()
+        editor.text = (
+            "CREATE TABLE t (id INTEGER, name TEXT);\n"
+            "INSERT INTO t (id, name) VALUES (1, 'alpha');\n"
+            "SELECT * FROM t;"
+        )
+        await app.execute_query()
+        await pilot.pause()
+
+        await app.action_delete_record()
+        await pilot.pause()
+
+        # No modal should be pushed; the app screen is still the main app.
+        assert not isinstance(app.screen, DeleteConfirmModal)
+        assert app.current_rows == [(1, "alpha")]

@@ -10,11 +10,13 @@ from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
+from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
     DataTable,
     Footer,
     Select,
+    Static,
 )
 from textual_textarea import TextEditor
 from textual_textarea.messages import TextAreaClipboardError
@@ -192,6 +194,80 @@ class ResultViewer(Container):
         yield DataTable(id="results_table", zebra_stripes=True, cursor_type="row")
 
 
+class DeleteConfirmModal(ModalScreen[bool]):
+    """Confirmation modal shown before deleting a record."""
+
+    DEFAULT_CSS = """
+    DeleteConfirmModal {
+        align: center middle;
+    }
+
+    .delete-dialog {
+        width: 50%;
+        height: auto;
+        border: round $error;
+        padding: 1 2;
+    }
+
+    .delete-title {
+        height: 1;
+        content-align: center middle;
+        text-style: bold;
+        color: $error;
+    }
+
+    .delete-message {
+        height: auto;
+        margin: 1 0;
+    }
+
+    .delete-button-row {
+        height: 1;
+        align-horizontal: center;
+        margin: 1 0 0 0;
+    }
+
+    .delete-button-row > Button {
+        margin: 0 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, table: str, pk_values: dict[str, object]) -> None:
+        super().__init__()
+        self.table = table
+        self.pk_values = pk_values
+
+    def compose(self) -> ComposeResult:
+        with Container(classes="delete-dialog"):
+            yield Static("Delete record", classes="delete-title")
+            pk_desc = ", ".join(
+                f"{col}={val!r}" for col, val in self.pk_values.items()
+            )
+            message = (
+                f"Are you sure you want to delete this record from "
+                f"'{self.table}'?\n\nMatching: {pk_desc}"
+            )
+            yield Static(message, classes="delete-message")
+            with Horizontal(classes="delete-button-row"):
+                yield Button("Cancel", id="delete_cancel_btn", variant="default")
+                yield Button("Delete", id="delete_confirm_btn", variant="error")
+
+    @on(Button.Pressed, "#delete_cancel_btn")
+    def on_cancel_pressed(self) -> None:
+        self.dismiss(False)
+
+    @on(Button.Pressed, "#delete_confirm_btn")
+    def on_confirm_pressed(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
 class DBShellApp(App, inherit_bindings=False):
     """Main TUI application for database shell with modern layout."""
 
@@ -332,6 +408,7 @@ class DBShellApp(App, inherit_bindings=False):
         ("ctrl+d", "select_database", "Select Database"),
         ("ctrl+u", "edit_record", "Edit Record"),
         ("ctrl+n", "add_record", "Add Record"),
+        ("ctrl+shift+d", "delete_record", "Delete Record"),
         ("ctrl+j", "copy_row_json", "Copy Row as JSON"),
         ("ctrl+shift+e", "export_data", "Export Data"),
         ("ctrl+q", "quit", "Quit"),
@@ -419,6 +496,12 @@ class DBShellApp(App, inherit_bindings=False):
                         "Add Record",
                         id="add_record_btn",
                         variant="default",
+                        disabled=True,
+                    )
+                    yield Button(
+                        "Delete Record",
+                        id="delete_record_btn",
+                        variant="error",
                         disabled=True,
                     )
                     yield Button(
@@ -527,6 +610,11 @@ class DBShellApp(App, inherit_bindings=False):
         """Handle add record button press."""
         await self.action_add_record()
 
+    @on(Button.Pressed, "#delete_record_btn")
+    async def delete_record_button(self) -> None:
+        """Handle delete record button press."""
+        await self.action_delete_record()
+
     @on(Button.Pressed, "#export_btn")
     async def export_button(self) -> None:
         """Handle export button press."""
@@ -606,6 +694,7 @@ class DBShellApp(App, inherit_bindings=False):
             self._clear_results()
             await self._update_edit_button_state()
             await self._update_add_button_state()
+            await self._update_delete_button_state()
             await self._update_export_button_state()
         else:
             self.notify(message, severity="error")
@@ -788,6 +877,14 @@ class DBShellApp(App, inherit_bindings=False):
             return
         export_btn.disabled = not self.current_rows
 
+    async def _update_delete_button_state(self) -> None:
+        """Enable the Delete Record button only when deletion is possible."""
+        try:
+            delete_btn = self.query_one("#delete_record_btn", Button)
+        except Exception:
+            return
+        delete_btn.disabled = self.source_table is None or not self.current_rows
+
     async def action_edit_record(self) -> None:
         """Open the edit modal for the currently selected/active record."""
         if not self.connected:
@@ -942,9 +1039,122 @@ class DBShellApp(App, inherit_bindings=False):
 
         results_viewer = self.query_one("ResultViewer")
         results_viewer.border_title = f"Results ({len(rows) if rows else 0} rows)"
-        # Row count changed (e.g. 0 -> 1), so Edit/Add availability can too.
+        # Row count changed (e.g. 0 -> 1), so Edit/Add/Delete availability can too.
         await self._update_edit_button_state()
         await self._update_add_button_state()
+        await self._update_delete_button_state()
+
+    async def action_delete_record(self) -> None:
+        """Open the delete confirmation modal for the active record."""
+        if not self.connected:
+            self.notify("No database connection", severity="error")
+            return
+
+        if not self.current_rows or not self.current_columns:
+            self.notify("Run a SELECT first to load a record", severity="warning")
+            return
+
+        if not self.source_table:
+            self.notify(
+                "Cannot determine source table for the current results. "
+                "Use a simple 'SELECT ... FROM <table>' query.",
+                severity="warning",
+            )
+            return
+
+        index = self._get_active_record_index()
+        if index is None:
+            self.notify("No record selected", severity="warning")
+            return
+
+        ok, message, primary_keys = self.adapter.get_primary_keys(self.source_table)
+        if not ok:
+            self.notify(f"Cannot delete: {message}", severity="error")
+            return
+        if not primary_keys:
+            self.notify(
+                f"Table '{self.source_table}' has no primary key; "
+                "cannot delete safely.",
+                severity="warning",
+            )
+            return
+
+        row = self.current_rows[index]
+        pk_values = {
+            pk: row[self.current_columns.index(pk)]
+            for pk in primary_keys
+            if pk in self.current_columns
+        }
+        if not pk_values or len(pk_values) != len(primary_keys):
+            self.notify(
+                "Primary key columns are not present in the current result set; "
+                "cannot build DELETE condition.",
+                severity="warning",
+            )
+            return
+
+        modal = DeleteConfirmModal(self.source_table, pk_values)
+
+        def _on_close(confirmed: bool) -> None:
+            if confirmed:
+                self.call_later(self._perform_delete, index, primary_keys, pk_values)
+
+        self.push_screen(modal, _on_close)
+
+    async def _perform_delete(
+        self,
+        previous_index: int,
+        primary_keys: list[str],
+        pk_values: dict[str, object],
+    ) -> None:
+        """Execute the DELETE for the active record and refresh results."""
+        quoted_table = self.adapter.quote_identifier(self.source_table)
+        where_parts: list[str] = []
+        params: list[object] = []
+        for pk in primary_keys:
+            quoted_pk = self.adapter.quote_identifier(pk)
+            where_parts.append(f"{quoted_pk} = {self.adapter.param_placeholder}")
+            params.append(pk_values[pk])
+
+        sql = f"DELETE FROM {quoted_table} WHERE {' AND '.join(where_parts)};"
+        success, message, _, _ = await asyncio.to_thread(
+            self.adapter.execute_query, sql, params
+        )
+        if not success:
+            self.notify(f"Delete failed: {message}", severity="error")
+            return
+
+        self.notify("Row deleted", severity="information")
+        await self._refresh_after_delete(previous_index)
+
+    async def _refresh_after_delete(self, previous_index: int) -> None:
+        """Re-run the last SELECT after a delete and update the view."""
+        if not self.last_select_query:
+            return
+
+        success, message, columns, rows = await asyncio.to_thread(
+            self.adapter.execute_query, self.last_select_query
+        )
+        if not success:
+            self.notify(f"Refresh failed: {message}", severity="error")
+            return
+
+        if columns and rows is not None:
+            self.current_columns = columns
+            self.current_rows = rows
+            if rows:
+                self.current_record_index = min(previous_index, len(rows) - 1)
+                self.selected_record_index = self.current_record_index
+            else:
+                self.current_record_index = 0
+                self.selected_record_index = None
+            await self.update_results_table(columns, rows)
+
+        results_viewer = self.query_one("ResultViewer")
+        results_viewer.border_title = f"Results ({len(rows) if rows else 0} rows)"
+        await self._update_edit_button_state()
+        await self._update_add_button_state()
+        await self._update_delete_button_state()
 
     async def action_copy_row_json(self) -> None:
         """Copy the currently active row as a JSON object to the clipboard."""
@@ -1176,6 +1386,7 @@ class DBShellApp(App, inherit_bindings=False):
 
         await self._update_edit_button_state()
         await self._update_add_button_state()
+        await self._update_delete_button_state()
         await self._update_export_button_state()
 
     async def update_results_table(self, columns: list[str], rows: list[tuple]) -> None:
